@@ -65,11 +65,15 @@ Which datasets to use and how to prepare them: [docs/DATASETS.md](docs/DATASETS.
 scale, MEAD for pseudo pairs).
 
 ```bash
-# 1. pre-compute latents, Whisper windows and caption embeddings (GPU recommended)
-python scripts/prepare_clips.py --manifest data/mead_pairs.jsonl --root data/raw --out data/latents/mead
-python scripts/prepare_clips.py --manifest data/wild.jsonl --root data/raw --out data/latents/wild
+# 1. SyncNet filter: drop badly synced videos, record each video's A/V offset
+wilro-sync sync-filter --manifest data/wild.jsonl --root data/raw --out data/wild.synced.jsonl
+wilro-sync sync-filter --manifest data/mead_pairs.jsonl --root data/raw --out data/mead_pairs.synced.jsonl
 
-# 2. train (single GPU, or `accelerate launch -m wilrosync.cli train ...` for multi-GPU)
+# 2. pre-compute latents, Whisper windows and caption embeddings (GPU recommended)
+python scripts/prepare_clips.py --manifest data/mead_pairs.synced.jsonl --root data/raw --out data/latents/mead
+python scripts/prepare_clips.py --manifest data/wild.synced.jsonl --root data/raw --out data/latents/wild
+
+# 3. train (single GPU, or `accelerate launch -m wilrosync.cli train ...` for multi-GPU)
 wilro-sync train --config configs/train/stage_a.yaml
 wilro-sync train --config configs/train/stage_a.yaml train_mode=adapter   # ablation: no LoRA
 
@@ -79,6 +83,17 @@ wilro-sync train --config configs/train/smoke_cpu.yaml
 
 Rough memory for Wan2.1-1.3B + audio adapter + LoRA at 512×512×49 frames: ~16–24 GB (estimate).
 The frozen VAE, Whisper and umT5 run only in `prepare_clips.py`, never during training.
+
+## Evaluation
+
+```bash
+wilro-sync lse out.mp4                             # LSE-C (higher is better) / LSE-D (lower is better)
+wilro-sync lse out.mp4 --bbox 410,80,620,330       # target face only, in a multi-face video
+```
+
+SyncNet scoring re-implements [syncnet_python](https://github.com/joonson/syncnet_python) (MIT; model and S3FD
+code vendored in `wilrosync/third_party/`) and reproduces its reference result on the demo clip. The pretrained
+SyncNet and S3FD weights are downloaded from the authors' site on first use.
 
 ## Citation
 

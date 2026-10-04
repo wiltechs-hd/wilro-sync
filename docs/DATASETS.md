@@ -28,8 +28,14 @@ Keep a held-out set (e.g. 20 HDTF speakers never used for training) plus a few m
 
 * **One clearly visible speaker, good A/V sync, at least ~3 s.** `prepare_clips.py` resamples to 25 fps.
 * **Face-centred crops.** `prepare_clips.py` currently centre-crops to a square, so crop landscape videos around
-  the face first (HDTF's crop boxes already give 512×512 face crops; or `ffmpeg -vf crop=w:h:x:y`). Automatic face crops and SyncNet
-  filtering are milestone M3.
+  the face first (HDTF's crop boxes already give 512×512 face crops; or `ffmpeg -vf crop=w:h:x:y`). Automatic
+  face crops are milestone M3.
+* **SyncNet filtering.** Before preparing clips, run
+  `wilro-sync sync-filter --manifest wild.jsonl --root raw --out wild.synced.jsonl` (add `--assume-cropped` for
+  face-crop videos). It drops videos with SyncNet confidence < 3 or |A/V offset| > 3 frames (dubbed audio, wrong
+  speaker, off-screen voice, static faces) and records each kept video's offset, which `prepare_clips.py` uses to
+  re-align the audio. Scores are cached in `wild.synced.report.jsonl`, so you can re-filter with other thresholds
+  without re-scoring.
 * **MEAD pseudo pairs**: pair two different sentences from the same actor, camera view, emotion and level, and
   write them to `raw/pairs.jsonl`:
 

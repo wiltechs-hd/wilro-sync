@@ -12,8 +12,9 @@ Manifest: a .jsonl with one job per line
   camera, different utterance.
 
 Frames are resampled to ``--fps`` and resized/centre-cropped to ``--size``. Face-centred crops,
-SyncNet offset/confidence filtering and per-frame mouth landmarks come with milestone M3; until then
-an optional per-row "mouth": [x, y] is used for every frame.
+per-frame mouth landmarks come with milestone M3; until then an optional per-row "mouth": [x, y] is
+used for every frame. Run `wilro-sync sync-filter` on the manifest first: it drops badly synced videos and adds
+an "av_offset" per row, which is applied here when cutting the audio windows.
 
 Example:
     python scripts/prepare_clips.py --manifest data/wild.jsonl --root data/raw --out data/latents/wild \
@@ -147,7 +148,9 @@ def main(argv: list[str] | None = None, encoders=None) -> int:
             for j, (src_cd, src_ab, ab, cd, feats) in enumerate(jobs):
                 z_ab = enc.latent(resize_crop(src_ab[ab : ab + a.frames], tuple(a.size)))
                 z_cd = enc.latent(resize_crop(src_cd[cd : cd + a.frames], tuple(a.size)))
-                all_win = frame_audio_windows(feats, ab + a.frames, a.fps, window=a.audio_window)
+                # SyncNet offset (from `wilro-sync sync-filter`): audio for frame v sits at v - av_offset
+                shift = -float(row.get("av_offset", 0)) * a.fps / 25.0
+                all_win = frame_audio_windows(feats, ab + a.frames, a.fps, window=a.audio_window, offset_frames=shift)
                 f_lat = z_ab.shape[1]
                 sample = {
                     "z_ab": z_ab, "z_cd": z_cd,

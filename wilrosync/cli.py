@@ -52,7 +52,33 @@ def cmd_train(a: argparse.Namespace) -> None:
     train(load_config(a.config, a.overrides))
 
 
+def cmd_lse(a: argparse.Namespace) -> None:
+    import json
+
+    from .eval.syncnet import SyncNet, lse
+
+    scorer = SyncNet(device=a.device)
+    rows = []
+    for video in a.videos:
+        r = lse(video, a.audio, bbox=a.bbox, scorer=scorer, assume_cropped=a.assume_cropped)
+        rows.append({"video": video, **r})
+        print(f"{video}: LSE-C {r['lse_c']:.3f}  LSE-D {r['lse_d']:.3f}  offset {r['offset']}")
+    ok = [r for r in rows if r["num_frames"]]
+    if len(ok) > 1:
+        print(f"mean over {len(ok)}: LSE-C {sum(r['lse_c'] for r in ok) / len(ok):.3f}  "
+              f"LSE-D {sum(r['lse_d'] for r in ok) / len(ok):.3f}")
+    if a.out:
+        with open(a.out, "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+
+
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["sync-filter"]:  # own argument parser (also used by the notebook)
+        from .data.sync_filter import main as sync_filter_main
+
+        sync_filter_main(argv[1:])
+        return
     p = argparse.ArgumentParser("wilro-sync")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -82,9 +108,21 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("overrides", nargs="*", help="dotlist overrides, e.g. max_steps=1000 data.num_workers=4")
     t.set_defaults(func=cmd_train)
 
+    sub.add_parser("sync-filter", help="score a clip manifest with SyncNet and drop badly synced videos "
+                   "(see `wilro-sync sync-filter --help`)")
+
+    ev = sub.add_parser("lse", help="LSE-C / LSE-D lip-sync metrics (SyncNet) for one or more videos")
+    ev.add_argument("videos", nargs="+")
+    ev.add_argument("--audio", default=None, help="score against this audio instead of each video's own track")
+    ev.add_argument("--bbox", type=_parse_bbox, help="score only the face starting in this box (multi-face)")
+    ev.add_argument("--assume-cropped", action="store_true")
+    ev.add_argument("--device", default=None)
+    ev.add_argument("--out", default=None, help="write per-video results as jsonl")
+    ev.set_defaults(func=cmd_lse)
+
     a = p.parse_args(argv)
     a.func(a)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()
