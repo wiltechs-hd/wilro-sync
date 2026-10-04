@@ -12,10 +12,10 @@ venv/
 .DS_Store
 
 # data, weights and outputs
-data/
-checkpoints/
-outputs/
-runs/
+/data/
+/checkpoints/
+/outputs/
+/runs/
 wandb/
 *.safetensors
 *.ckpt
