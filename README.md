@@ -41,7 +41,7 @@ pytest -q                        # CPU, ~10 s
 ## Google Colab
 
 [`notebooks/wilro_sync_colab.ipynb`](notebooks/wilro_sync_colab.ipynb) walks through setup, sanity checks, data
-preparation, training (L4 / A100) and inference, keeping clips and checkpoints on Google Drive so a disconnected
+preparation, training (L4 / A100) and inference in plain Python (no form widgets), keeping clips and checkpoints on Google Drive so a disconnected
 session can resume.
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wiltechs-hd/wilro-sync/blob/main/notebooks/wilro_sync_colab.ipynb)
 
@@ -60,6 +60,9 @@ Options: `--config configs/infer/default.yaml`, `--steps`, `--tau`, `--omega-pea
 Detector-based target selection (reference image, track id, active speaker) is milestone M1.
 
 ## Training
+
+Which datasets to use and how to prepare them: [docs/DATASETS.md](docs/DATASETS.md) (HDTF to start, TalkVid to
+scale, MEAD for pseudo pairs).
 
 ```bash
 # 1. pre-compute latents, Whisper windows and caption embeddings (GPU recommended)
