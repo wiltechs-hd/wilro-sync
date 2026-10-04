@@ -1,0 +1,44 @@
+# Stage A: Wan2.1-T2V-1.3B + audio adapter + LoRA, timestep-dependent sampling.
+# Single 24 GB GPU: batch_size 1, grad_accum 8, crop-size clips (512x512, 49 frames).
+# Paper reference: 64x A100, batch 64, lr 1e-5, 80k steps.
+
+model:
+  base_repo: Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+  audio_model: openai/whisper-tiny
+  audio_layers: 5
+  audio_dim: 384
+  audio_window: 10
+  use_mask_channel: false
+
+data:
+  pairs_index: data/latents/mead/index.jsonl
+  arbitrary_index: data/latents/wild/index.jsonl
+  null_text: data/latents/null_text.safetensors
+  tds_enabled: true
+  tds_threshold: 0.85
+  sigma_mode: shifted_uniform
+  sigma_shift: 3.0
+  num_workers: 4
+
+train_mode: lora
+lora_rank: 64
+lr: 1.0e-5
+lr_new: 1.0e-4
+optimizer: adamw
+batch_size: 1
+grad_accum: 8
+max_steps: 80000
+warmup_steps: 500
+mixed_precision: bf16
+gradient_checkpointing: true
+ema_decay: 0.999
+
+p_drop_audio: 0.15
+p_drop_text: 0.10
+p_drop_both: 0.05
+mouth_loss_weight: 0.0
+
+output_dir: runs/stage_a
+save_every: 2000
+log_every: 20
+seed: 42

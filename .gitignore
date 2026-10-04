@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# data, weights and outputs
+data/
+checkpoints/
+outputs/
+runs/
+wandb/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.mp4
+*.wav
+!tests/assets/**
+
+# local scratch from the Claude desktop app
+Claude outputs/

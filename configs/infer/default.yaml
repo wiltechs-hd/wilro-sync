@@ -1,0 +1,20 @@
+# Inference defaults (mirrors wilrosync.pipeline.lipsync.InferenceConfig).
+steps: 50          # Euler steps from sigma = tau to 0
+tau: 0.92          # progressive noise init (paper)
+shift: 3.0         # Wan timestep shift (3.0 for 480p, 5.0 for 720p)
+window: 81         # frames per generation window (1 + 4k)
+overlap: 12        # cross-faded frames between windows
+max_side: 832      # processing resolution (long side)
+region_lock: true  # pin non-target regions to the source every step
+release_steps: 3
+release_dilate: 1
+feather_px: 6.0
+color_match: true
+seed: 0
+dscfg:
+  omega_peak: 4.5
+  omega_base: 1.0
+  gamma: 1.5       # paper
+  sigma_rel: 0.35  # Gaussian std / face width
+  min_scale: 1.0   # 0 = paper-exact temporal decay
+  target_only: true

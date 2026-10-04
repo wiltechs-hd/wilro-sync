@@ -1,0 +1,37 @@
+# Tiny random model + synthetic data. Runs on CPU in seconds; used by CI and to check the setup.
+model:
+  base_repo: tiny
+  audio_layers: 3
+  audio_dim: 8
+  audio_window: 2
+
+tiny_base:
+  patch_size: [1, 2, 2]
+  num_attention_heads: 2
+  attention_head_dim: 12
+  in_channels: 4
+  out_channels: 4
+  text_dim: 16
+  freq_dim: 32
+  ffn_dim: 48
+  num_layers: 2
+  rope_max_seq_len: 64
+
+data:
+  synthetic: true
+  synthetic_shape: [4, 3, 8, 8]
+  num_workers: 0
+
+train_mode: lora
+lora_rank: 4
+batch_size: 2
+grad_accum: 1
+max_steps: 10
+warmup_steps: 0
+mixed_precision: "no"
+gradient_checkpointing: true
+ema_decay: 0.99
+mouth_loss_weight: 1.0
+output_dir: runs/smoke
+save_every: 10
+log_every: 5

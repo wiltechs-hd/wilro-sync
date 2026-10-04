@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wilro-sync"
+version = "0.0.1"
+description = "OmniSync-style mask-free lip synchronization on Wan video DiTs, with target-face control for multi-face scenes."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Eddy Ma" }]
+keywords = ["lip-sync", "diffusion", "video", "flow-matching", "wan", "talking-head"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.4",
+    "diffusers>=0.35",
+    "transformers>=4.50",
+    "peft>=0.15",
+    "accelerate>=1.0",
+    "safetensors>=0.4",
+    "omegaconf>=2.3",
+    "numpy>=1.26",
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+    "sentencepiece>=0.2",
+    "tqdm",
+]
+
+[project.urls]
+Homepage = "https://github.com/wiltechs-hd/wilro-sync"
+Issues = "https://github.com/wiltechs-hd/wilro-sync/issues"
+Paper = "https://arxiv.org/abs/2505.21448"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+train = ["bitsandbytes>=0.43"]
+
+[project.scripts]
+wilro-sync = "wilrosync.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["wilrosync"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B905"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["E402", "E741"]
