@@ -101,7 +101,7 @@ def test_stage_end_to_end(stage_env, monkeypatch):
 
     calls = []
 
-    def fake_download(url, start, end, out, cookies=None):
+    def fake_download(url, start, end, out, cookies=None, seg_id=None):
         calls.append(url)
         if "BBBB" in url:
             raise RuntimeError("Sign in to confirm you're not a bot")
@@ -141,3 +141,49 @@ def test_stage_end_to_end(stage_env, monkeypatch):
     # a second stage reuses the prepared clips (no new encoding work)
     res2 = stages.sync_and_prepare(plan, str(work), man, scorer=_StubScorer(scores), encoders=None)
     assert res2.get("pairs_clips") == 2
+
+
+def test_download_segments_script_and_acquire_from_segments(stage_env, monkeypatch):
+    """scripts/download_segments.py (fake yt-dlp on PATH) -> raw/segments -> acquire uses them, no YouTube."""
+    import stat
+    import subprocess
+    import sys
+
+    from wilrosync.data import stages
+    from wilrosync.io.media import _ffmpeg, ffmpeg
+
+    tmp, clip = stage_env
+    bindir = tmp / "bin"
+    bindir.mkdir()
+    fake = bindir / "yt-dlp"
+    fake.write_text(f"""#!{sys.executable}
+import shutil, sys
+args = sys.argv[1:]
+if "BBBBBBBBBBB" in args[-1]:
+    print("ERROR: Sign in to confirm you're not a bot", file=sys.stderr); sys.exit(1)
+out = args[args.index("-o") + 1].replace("%(ext)s", "mp4")
+shutil.copy({clip!r}, out)
+""")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    os.symlink(_ffmpeg(), bindir / "ffmpeg")
+    env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+    work = tmp / "work"
+    cfg = stages.load_stage("smoke", ["hdtf.holdout_groups=1", "clips.size=32"])
+    plan = stages.plan_stage(cfg, str(work), hdtf_dir=_hdtf_fixture(tmp / "hdtf"))
+    seg_dir = work / "raw" / "segments"
+    cmd = [sys.executable, "scripts/download_segments.py", "--plan", str(work / "stages" / "smoke" / "plan.json"),
+           "--out", str(seg_dir), "--retries", "0"]
+    out = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True).stdout
+    assert "2 ok, 2 failed" in out and "cookies-from-browser" in out
+    assert len(list(seg_dir.glob("hdtf_*.mp4"))) == 2
+    assert "2 to download" in subprocess.run(cmd, env=env, capture_output=True, text=True).stdout  # resumes
+
+    def fake_crop(src, dst, detector=None, size=512):
+        ffmpeg("-i", src, "-vf", f"scale={size}:{size}", "-c:a", "aac", dst)
+        return {"window": [0, 0, 1]}
+
+    c = stages.acquire(plan, str(work), cropper=fake_crop, allow_youtube=False, cleanup_segments=True,
+                       progress=None)
+    assert c["ok"] == 2 and c["failed"] == 2
+    assert not list(seg_dir.glob("hdtf_*.mp4"))  # cleaned up after cropping

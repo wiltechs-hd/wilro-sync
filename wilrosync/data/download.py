@@ -85,17 +85,28 @@ def cut_segment(src: str, start: float, end: float, out_path: str) -> None:
            "-preset", "veryfast", "-c:a", "aac", out_path)
 
 
-def make_downloader(sources_dir: str | None = None, allow_youtube: bool = True):
-    """Downloader that cuts from a local full video when available, otherwise uses yt-dlp."""
+def make_downloader(sources_dir: str | None = None, allow_youtube: bool = True, segments_dir: str | None = None):
+    """Downloader for one segment, trying in order:
 
-    def get(url: str, start: float, end: float, out_path: str, cookies: str | None = None) -> None:
+    1. ``<segments_dir>/<segment id>.mp4`` - the exact segment, downloaded elsewhere (``scripts/download_segments.py``
+       on your own computer, then uploaded / synced to Google Drive);
+    2. ``<sources_dir>/<youtube id>.<ext>`` - the full video, downloaded elsewhere; the segment is cut locally;
+    3. yt-dlp, if ``allow_youtube``."""
+
+    def get(url: str, start: float, end: float, out_path: str, cookies: str | None = None,
+            seg_id: str | None = None) -> None:
+        if segments_dir and seg_id:
+            seg = os.path.join(segments_dir, seg_id + ".mp4")
+            if os.path.isfile(seg):
+                shutil.copyfile(seg, out_path)
+                return
         local = find_local_source(url, sources_dir)
         if local:
             cut_segment(local, start, end, out_path)
         elif allow_youtube:
             download_segment(url, start, end, out_path, cookies=cookies)
         else:
-            raise FileNotFoundError(f"no local source for {url} in {sources_dir}")
+            raise FileNotFoundError(f"{seg_id or url}: not in {segments_dir} or {sources_dir} (YouTube disabled)")
 
     return get
 

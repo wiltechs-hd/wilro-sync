@@ -52,9 +52,23 @@ What each step does:
 Everything is resumable and shared: `first_model` reuses whatever `smoke` downloaded, cropped, scored and
 prepared. Add your own (already face-cropped) videos with `extra_videos: [my_videos]` (folders under `raw/`).
 
-**YouTube from cloud machines** (Colab, most VMs) usually hits "Sign in to confirm you're not a bot". Pass a
-browser cookies export (`--cookies cookies.txt` / `YOUTUBE_COOKIES`), or download the full videos on your own
-computer from the exported URL list and upload them to `raw/sources/`.
+**YouTube from cloud machines** (Colab, most VMs) usually hits "Sign in to confirm you're not a bot". Download
+on your own computer instead, straight into Google Drive:
+
+```bash
+# on your Mac/PC (Python 3 + yt-dlp + ffmpeg; macOS: brew install yt-dlp ffmpeg), after the plan step
+python3 scripts/download_segments.py \
+    --plan "<Drive>/wilro-sync-work/stages/smoke/plan.json" \
+    --out  "<Drive>/wilro-sync-work/raw/segments" --cookies-from-browser chrome
+```
+
+With Google Drive for desktop, `<Drive>` is a local folder (macOS: `~/Library/CloudStorage/GoogleDrive-<you>/My Drive`)
+and files sync automatically; otherwise upload `raw/segments` in the Drive web UI. The acquire step then takes each
+segment from `raw/segments/<segment id>.mp4` instead of YouTube (and, with `cleanup_segments`, deletes it once the
+face crop exists). Only the needed time ranges are downloaded: ~3–4 GB for `smoke`, roughly 1.5 GB per hour of
+video for the larger stages, so download those in batches (`--limit`) and let acquire clean up between batches.
+Other options: cut from full videos you put in `raw/sources/<youtube id>.mp4`, or pass a cookies export
+(`--cookies cookies.txt` / `YOUTUBE_COOKIES`) to the cloud downloader.
 
 ## Storage
 

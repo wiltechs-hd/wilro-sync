@@ -181,16 +181,19 @@ def n_clips(seg: dict, c: ClipConfig) -> int:
 # ----------------------------------------------------------------------------- 2. acquire
 def acquire(plan: dict, work: str, cookies: str | None = None, downloader=None, cropper=None, detector=None,
             limit: int | None = None, retry_failed: bool = False, include_holdout: bool = True,
-            tmp_dir: str | None = None, allow_youtube: bool = True, progress=print) -> dict:
+            tmp_dir: str | None = None, allow_youtube: bool = True, cleanup_segments: bool = False,
+            progress=print) -> dict:
     """Download + face-crop every planned segment that is not on disk yet.
 
-    Segments are cut from full videos in ``<work>/raw/sources/<youtube id>.mp4`` when present (download them on
-    your own computer if YouTube blocks the cloud machine; see ``export_url_list``), otherwise fetched with
-    yt-dlp (``cookies`` = a cookies.txt export helps against YouTube's bot check)."""
+    Each segment comes from ``<work>/raw/segments/<segment id>.mp4`` (downloaded on your own computer with
+    ``scripts/download_segments.py`` and uploaded / synced to Drive), else is cut from a full video in
+    ``<work>/raw/sources/<youtube id>.mp4``, else is fetched with yt-dlp (``cookies`` = a cookies.txt export helps
+    against YouTube's bot check). ``cleanup_segments`` deletes a downloaded segment once its face crop exists."""
     from .download import make_downloader
     from .face_crop import face_crop_video
 
-    downloader = downloader or make_downloader(os.path.join(work, "raw", "sources"), allow_youtube)
+    segments_dir = os.path.join(work, "raw", "segments")
+    downloader = downloader or make_downloader(os.path.join(work, "raw", "sources"), allow_youtube, segments_dir)
     cropper = cropper or face_crop_video
     paths = StagePaths(work, plan["stage"]["name"])
     log_path = os.path.join(paths.raw, "acquire_log.jsonl")
@@ -221,7 +224,7 @@ def acquire(plan: dict, work: str, cookies: str | None = None, downloader=None, 
         tmp = os.path.join(tmp_root, seg["id"] + ".mp4")
         entry = {"id": seg["id"]}
         try:
-            downloader(seg["url"], seg["start"], seg["end"], tmp, cookies=cookies)
+            downloader(seg["url"], seg["start"], seg["end"], tmp, cookies=cookies, seg_id=seg["id"])
             if detector is None and cropper is face_crop_video:
                 from ..eval.syncnet import S3FDDetector
 
@@ -232,6 +235,9 @@ def acquire(plan: dict, work: str, cookies: str | None = None, downloader=None, 
             else:
                 os.replace(out + ".part.mp4", out)
                 entry.update(info)
+                seg_file = os.path.join(segments_dir, seg["id"] + ".mp4")
+                if cleanup_segments and os.path.isfile(seg_file):  # the face crop replaces it
+                    os.remove(seg_file)
         except Exception as e:  # keep going
             entry["error"] = f"{type(e).__name__}: {str(e)[:300]}"
         finally:
