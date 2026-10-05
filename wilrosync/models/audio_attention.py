@@ -37,9 +37,14 @@ class AudioCrossAttention(nn.Module):
             raise ValueError(f"{n_tok} video tokens are not divisible by {f} latent frames")
         s = n_tok // f
         hd = d // self.heads
-        x = self.norm(hidden.float()).to(hidden.dtype)
+        w_dtype = self.to_q.weight.dtype
+        # norm in fp32 (with fp32-cast weights) regardless of param/hidden dtype, then compute in w_dtype
+        x = F.layer_norm(
+            hidden.to(w_dtype).float(), self.norm.normalized_shape,
+            self.norm.weight.float(), self.norm.bias.float(), self.norm.eps
+        ).to(w_dtype)
         q = self.norm_q(self.to_q(x)).view(b * f, s, self.heads, hd).transpose(1, 2)
-        a = audio.to(hidden.dtype).reshape(b * f, -1, d)
+        a = audio.to(w_dtype).reshape(b * f, -1, d)
         k = self.norm_k(self.to_k(a)).view(b * f, -1, self.heads, hd).transpose(1, 2)
         v = self.to_v(a).view(b * f, -1, self.heads, hd).transpose(1, 2)
         out = F.scaled_dot_product_attention(q, k, v)

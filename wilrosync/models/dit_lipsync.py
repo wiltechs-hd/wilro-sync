@@ -56,7 +56,9 @@ class WanLipSyncTransformer(nn.Module):
         self.audio_attn = nn.ModuleList(
             [AudioCrossAttention(self.inner_dim, bc.num_attention_heads, eps=bc.eps) for _ in base.blocks]
         )
-        dtype = next(base.parameters()).dtype
+        # NB: some base params (AdaLN tables) are kept in fp32 by diffusers, so we can't use
+        # next(base.parameters()).dtype -- the patch embedding carries the compute dtype.
+        dtype = self.base.patch_embedding.weight.dtype
         self.audio_proj.to(dtype)
         self.audio_attn.to(dtype)
         self.gradient_checkpointing = False
