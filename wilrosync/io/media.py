@@ -17,14 +17,42 @@ def _ffmpeg() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def read_video(path: str, max_frames: int | None = None, fps: float | None = None) -> tuple[np.ndarray, float]:
-    """Returns (frames uint8 [T, H, W, 3], fps). ``fps`` resamples the video (e.g. 25 for training)."""
+def probe_video(path: str) -> dict:
+    """{"width", "height", "fps", "duration"} of a video file (no frames decoded)."""
     import imageio_ffmpeg
 
-    params = ["-r", str(fps)] if fps else None
-    gen = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24", output_params=params)
+    gen = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24")
     meta = next(gen)
+    gen.close()
     w, h = meta["size"]
+    return {"width": int(w), "height": int(h), "fps": float(meta.get("fps") or 25.0),
+            "duration": float(meta.get("duration") or 0.0)}
+
+
+def read_video(path: str, max_frames: int | None = None, fps: float | None = None,
+               max_side: int | None = None) -> tuple[np.ndarray, float]:
+    """Returns (frames uint8 [T, H, W, 3], fps). ``fps`` resamples the video (e.g. 25 for training);
+    ``max_side`` downscales so the longer side is at most that many pixels (even sizes)."""
+    import imageio_ffmpeg
+
+    params: list[str] = ["-r", str(fps)] if fps else []
+    size = None
+    if max_side:
+        info = probe_video(path)
+        r = min(1.0, max_side / max(info["width"], info["height"]))
+        size = (max(2, int(info["width"] * r) // 2 * 2), max(2, int(info["height"] * r) // 2 * 2))
+        params += ["-vf", f"scale={size[0]}:{size[1]}"]
+    import logging
+
+    log = logging.getLogger("imageio_ffmpeg")  # it warns when the output size differs from the source
+    level = log.level
+    log.setLevel(logging.ERROR)
+    try:
+        gen = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24", output_params=params or None)
+        meta = next(gen)
+    finally:
+        log.setLevel(level)
+    w, h = size or meta["size"]
     fps = float(fps or meta.get("fps") or 25.0)
     frames = []
     for i, buf in enumerate(gen):
@@ -35,6 +63,13 @@ def read_video(path: str, max_frames: int | None = None, fps: float | None = Non
     if not frames:
         raise ValueError(f"no frames decoded from {path}")
     return np.stack(frames), fps
+
+
+def ffmpeg(*args: str) -> None:
+    """Run the bundled ffmpeg (quiet); raises on failure."""
+    proc = subprocess.run([_ffmpeg(), "-y", "-loglevel", "error", *args], capture_output=True)
+    if proc.returncode:
+        raise RuntimeError(proc.stderr.decode()[-2000:])
 
 
 def write_video(path: str, frames: np.ndarray, fps: float, audio_path: str | None = None, crf: int = 17) -> None:

@@ -79,6 +79,11 @@ def main(argv: list[str] | None = None) -> None:
 
         sync_filter_main(argv[1:])
         return
+    if argv[:1] == ["data"]:
+        from .data.stages import main as data_main
+
+        data_main(argv[1:])
+        return
     p = argparse.ArgumentParser("wilro-sync")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -108,6 +113,8 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("overrides", nargs="*", help="dotlist overrides, e.g. max_steps=1000 data.num_workers=4")
     t.set_defaults(func=cmd_train)
 
+    sub.add_parser("data", help="build a data stage: smoke | first_model | paper_scale "
+                   "(see `wilro-sync data --help`)")
     sub.add_parser("sync-filter", help="score a clip manifest with SyncNet and drop badly synced videos "
                    "(see `wilro-sync sync-filter --help`)")
 

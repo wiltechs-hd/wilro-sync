@@ -12,7 +12,7 @@ The authors have only a [project page](https://ziqiaopeng.github.io/OmniSync/). 
 |---|---|
 | M0 scaffold | **done**: packaging, CLI, configs, CI, Wan2.1 backbone wrapper (bit-exact with diffusers on the real 1.3B weights) |
 | M2 inference pipeline | **done (needs a trained checkpoint)**: noise init, target-aware DS-CFG, region lock, composite, planner, stitching. Target from a bbox or the whole frame; detector-based selection is M1. |
-| M3 data pipeline | **in progress**: `scripts/prepare_clips.py` (latents, Whisper windows, captions); SyncNet filtering + A/V offset correction (`wilro-sync sync-filter`); LSE-C/D metrics (`wilro-sync lse`). Face crops and landmarks still to do. |
+| M3 data pipeline | **mostly done**: data stages smoke / first_model / paper_scale (`wilro-sync data`): HDTF + TalkVid acquisition, automatic face crops, MEAD pairs, held-out identities, SyncNet filtering + A/V offset correction, incremental clip preparation; LSE-C/D metrics. Still to do: per-frame mouth landmarks. |
 | M4 model + training | **code done**: audio projector + cross-attn, widened input, LoRA/adapter/full modes, timestep-dependent sampler, CFG dropout, EMA, checkpoints. Next: first GPU run. |
 | M1, M5–M8 | not started |
 

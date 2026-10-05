@@ -65,15 +65,13 @@ Which datasets to use and how to prepare them: [docs/DATASETS.md](docs/DATASETS.
 scale, MEAD for pseudo pairs).
 
 ```bash
-# 1. SyncNet filter: drop badly synced videos, record each video's A/V offset
-wilro-sync sync-filter --manifest data/wild.jsonl --root data/raw --out data/wild.synced.jsonl
-wilro-sync sync-filter --manifest data/mead_pairs.jsonl --root data/raw --out data/mead_pairs.synced.jsonl
+# 1. data stage: download HDTF/TalkVid segments, face-crop, SyncNet-filter, pre-compute latents
+pip install -e ".[data]"
+wilro-sync data smoke --work /data/wilro          # then first_model, paper_scale (docs/DATASETS.md)
 
-# 2. pre-compute latents, Whisper windows and caption embeddings (GPU recommended)
-python scripts/prepare_clips.py --manifest data/mead_pairs.synced.jsonl --root data/raw --out data/latents/mead
-python scripts/prepare_clips.py --manifest data/wild.synced.jsonl --root data/raw --out data/latents/wild
+# (lower level, for your own videos: wilro-sync sync-filter ... ; python scripts/prepare_clips.py ...)
 
-# 3. train (single GPU, or `accelerate launch -m wilrosync.cli train ...` for multi-GPU)
+# 2. train (single GPU, or `accelerate launch -m wilrosync.cli train ...` for multi-GPU)
 wilro-sync train --config configs/train/stage_a.yaml
 wilro-sync train --config configs/train/stage_a.yaml train_mode=adapter   # ablation: no LoRA
 

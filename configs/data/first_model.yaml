@@ -1,0 +1,31 @@
+# First model: all of HDTF + ~150 h of quality-filtered TalkVid + MEAD pseudo pairs (if downloaded).
+# Needs ~370 GB of disk (Google Drive 2 TB plan, a GCS bucket mounted with gcsfuse, or a VM disk).
+name: first_model
+description: HDTF (all, 20 videos held out) + 150 h TalkVid (<= 5 min per person) + MEAD front-view pairs
+hdtf:
+  enabled: true
+  holdout_groups: 20
+talkvid:
+  enabled: true
+  hours: 150
+  max_seconds_per_person: 300
+  min_dover: 8.5
+  min_orientation: 85
+  min_rotation: 75
+  min_face_res: 150
+  holdout_fraction: 0.01
+mead:
+  enabled: true
+  root: mead
+  views: [front]
+  per_folder: 4
+clips:
+  size: 512
+  frames: 49
+  clips_per_minute: 3
+  max_clips_per_video: 12
+storage_budget_gb: 400
+train_overrides:
+  max_steps: 30000
+  save_every: 1000
+  keep_last: 3

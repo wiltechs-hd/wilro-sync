@@ -15,42 +15,46 @@ in-the-wild YouTube talking-head video**. The public datasets below cover both r
 Not recommended as primary data: **VoxCeleb2** (224p face crops, too low for 512 px training),
 **LRS2/LRS3** (restrictive BBC/TED licences), **AVSpeech** (very noisy; needs heavy filtering).
 
-## Suggested plan
+## Stages
 
-1. **Smoke run** – 20–50 HDTF videos, ~2k steps on an L4: check that the loss falls and nothing breaks.
-2. **First model** – all of HDTF + MEAD pseudo pairs + a filtered TalkVid subset (~100–200 h: high DOVER score,
-   single frontal-ish face, face at least ~256 px tall).
-3. **Paper scale** – grow the TalkVid subset to ~400 h.
+The plan is implemented as three data stages (`configs/data/*.yaml`), run with `wilro-sync data <stage>` or from
+the Colab notebook (`STAGE = "..."`):
 
-Keep a held-out set (e.g. 20 HDTF speakers never used for training) plus a few multi-face clips for evaluation.
+| Stage | Sources | Train data | Disk (est.) | Training |
+|---|---|---|---|---|
+| `smoke` | 40 HDTF segments | ~1.8 h, ~230 clips | ~4 GB | 2k steps, 1 L4/A100 |
+| `first_model` | all HDTF + ~130 h TalkVid (quality-filtered, ≤ 5 min per person) + MEAD front-view pairs | ~145 h, ~4.3k identities, ~37k clips | ~370 GB | 30k steps |
+| `paper_scale` | all HDTF + ~400 h TalkVid (looser filters, ≤ 10 min per person) + MEAD pairs from 3 views | ~415 h, ~7.2k identities, ~94k clips | ~1 TB | 80k steps, multi-GPU |
 
-## Preparing the videos
+Estimates come from the real HDTF / TalkVid metadata; `plan` prints them for your settings and refuses to
+start when they exceed `storage_budget_gb`. Every stage holds out whole identities (20 HDTF videos, ~1 % of
+TalkVid speakers) for evaluation.
 
-* **One clearly visible speaker, good A/V sync, at least ~3 s.** `prepare_clips.py` resamples to 25 fps.
-* **Face-centred crops.** `prepare_clips.py` currently centre-crops to a square, so crop landscape videos around
-  the face first (HDTF's crop boxes already give 512×512 face crops; or `ffmpeg -vf crop=w:h:x:y`). Automatic
-  face crops are milestone M3.
-* **SyncNet filtering.** Before preparing clips, run
-  `wilro-sync sync-filter --manifest wild.jsonl --root raw --out wild.synced.jsonl` (add `--assume-cropped` for
-  face-crop videos). It drops videos with SyncNet confidence < 3 or |A/V offset| > 3 frames (dubbed audio, wrong
-  speaker, off-screen voice, static faces) and records each kept video's offset, which `prepare_clips.py` uses to
-  re-align the audio. Scores are cached in `wild.synced.report.jsonl`, so you can re-filter with other thresholds
-  without re-scoring.
-* **MEAD pseudo pairs**: pair two different sentences from the same actor, camera view, emotion and level, and
-  write them to `raw/pairs.jsonl`:
-
-```python
-import glob, itertools, json, os, random
-
-root = "raw"  # WORK_DIR/raw
-rows = []
-for d in glob.glob(f"{root}/mead/*/video/front/*/level_*"):  # actor/video/view/emotion/level
-    clips = sorted(glob.glob(f"{d}/*.mp4"))
-    for a, b in random.sample(list(itertools.permutations(clips, 2)), k=min(4, len(clips) * (len(clips) - 1))):
-        rows.append({"kind": "pseudo_pair", "cond": os.path.relpath(a, root), "target": os.path.relpath(b, root)})
-with open(f"{root}/pairs.jsonl", "w") as f:
-    f.writelines(json.dumps(r) + "\n" for r in rows)
+```bash
+wilro-sync data smoke --work /data/wilro                          # plan, acquire, manifest, prepare
+wilro-sync data first_model --work /data/wilro talkvid.hours=80   # any stage field can be overridden
+wilro-sync data first_model --work /data/wilro --export-urls urls.txt   # videos to fetch yourself
 ```
+
+What each step does:
+
+1. **plan** – HDTF segments from its annotation files, TalkVid clips from its Hugging Face metadata filtered by
+   the shipped quality scores (DOVER, head orientation/rotation, face resolution), hour budget spread
+   round-robin over identities.
+2. **acquire** – downloads each segment with yt-dlp (or cuts it from `raw/sources/<youtube id>.mp4` if you
+   downloaded the full video yourself), then writes a **512×512, 25 fps face crop** (S3FD face track, one fixed
+   square window per clip, so no crop jitter). Segments without a stable, large-enough face are dropped.
+   MEAD clips (manual download, extracted to `raw/mead/`) are face-cropped the same way.
+3. **manifest** – training rows (with a per-video clip count), MEAD pseudo pairs and the held-out list.
+4. **prepare** – SyncNet filter (confidence ≥ 3, |offset| ≤ 3 frames, offsets corrected), then latents and audio
+   windows into one clip folder shared by all stages.
+
+Everything is resumable and shared: `first_model` reuses whatever `smoke` downloaded, cropped, scored and
+prepared. Add your own (already face-cropped) videos with `extra_videos: [my_videos]` (folders under `raw/`).
+
+**YouTube from cloud machines** (Colab, most VMs) usually hits "Sign in to confirm you're not a bot". Pass a
+browser cookies export (`--cookies cookies.txt` / `YOUTUBE_COOKIES`), or download the full videos on your own
+computer from the exported URL list and upload them to `raw/sources/`.
 
 ## Storage
 

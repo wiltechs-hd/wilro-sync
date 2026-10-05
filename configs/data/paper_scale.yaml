@@ -1,0 +1,31 @@
+# Paper scale: ~400 h of in-the-wild video (HDTF + TalkVid) + MEAD pairs, like OmniSync's training set.
+# ~1 TB of disk (~94k clips) and multi-GPU training; run on a cloud VM rather than Colab.
+name: paper_scale
+description: HDTF (all) + 400 h TalkVid (<= 10 min per person, looser quality filters) + MEAD pairs from three views
+hdtf:
+  enabled: true
+  holdout_groups: 20
+talkvid:
+  enabled: true
+  hours: 400
+  max_seconds_per_person: 600
+  min_dover: 7.5
+  min_orientation: 75
+  min_rotation: 65
+  min_face_res: 110
+  holdout_fraction: 0.01
+mead:
+  enabled: true
+  root: mead
+  views: [front, left_30, right_30]
+  per_folder: 6
+clips:
+  size: 512
+  frames: 49
+  clips_per_minute: 3
+  max_clips_per_video: 12
+storage_budget_gb: 1200
+train_overrides:
+  max_steps: 80000
+  save_every: 2000
+  keep_last: 3
