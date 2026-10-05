@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 
@@ -12,6 +13,11 @@ AUDIO_SR = 16000
 
 
 def _ffmpeg() -> str:
+    """Prefer a system ffmpeg (e.g. Colab's /usr/bin/ffmpeg) over the static imageio-ffmpeg build:
+    yt-dlp's --download-sections / stream merging segfaults (-11) on some bundled binaries."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
     import imageio_ffmpeg
 
     return imageio_ffmpeg.get_ffmpeg_exe()
