@@ -213,9 +213,13 @@ def acquire(plan: dict, work: str, cookies: str | None = None, downloader=None, 
         out = raw_path(paths, seg, is_held)
         if os.path.isfile(out):
             counts["existing"] += 1
+            if progress:
+                progress(f"[skip] {seg['id']}: already cropped")
             continue
         if seg["id"] in failed:
             counts["skipped"] += 1
+            if progress:
+                progress(f"[skip] {seg['id']}: no stable face (permanent)")
             continue
         if limit is not None and done >= limit:
             break
