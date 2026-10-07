@@ -120,7 +120,7 @@ def test_stage_end_to_end(stage_env, monkeypatch):
     c1 = stages.acquire(plan, str(work), downloader=fake_download, cropper=fake_crop, progress=None)
     assert c1["ok"] == 2 and c1["failed"] == 2 and c1["mead"]["ok"] == 2
     c2 = stages.acquire(plan, str(work), downloader=fake_download, cropper=fake_crop, progress=None)
-    assert c2["existing"] == 2 and c2["failed"] == 2  # bot-check failures are retried, successes reused
+    assert c2["existing"] == 2 and c2["failed"] == 0 and c2["skipped"] == 2  # failed segments not retried
 
     man = stages.write_manifests(plan, str(work))
     assert man["counts"]["pairs"] == 2 and man["counts"]["wild"] + man["counts"]["holdout"] == 2

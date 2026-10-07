@@ -197,12 +197,12 @@ def acquire(plan: dict, work: str, cookies: str | None = None, downloader=None, 
     cropper = cropper or face_crop_video
     paths = StagePaths(work, plan["stage"]["name"])
     log_path = os.path.join(paths.raw, "acquire_log.jsonl")
-    failed = set()  # only permanent failures (no usable face) are skipped; download errors are retried
+    failed = set()  # segments to skip unless retry_failed (default: any past error is permanent)
     if os.path.isfile(log_path) and not retry_failed:
         for line in open(log_path):
             if line.strip():
                 e = json.loads(line)
-                if e.get("error") == "no stable face":
+                if e.get("error"):
                     failed.add(e["id"])
     jobs = [(s, False) for s in plan["train"]] + ([(s, True) for s in plan["holdout"]] if include_holdout else [])
     counts = {"ok": 0, "skipped": 0, "failed": 0, "existing": 0}
@@ -219,7 +219,7 @@ def acquire(plan: dict, work: str, cookies: str | None = None, downloader=None, 
         if seg["id"] in failed:
             counts["skipped"] += 1
             if progress:
-                progress(f"[skip] {seg['id']}: no stable face (permanent)")
+                progress(f"[skip] {seg['id']}: previously failed (retry_failed=True to retry)")
             continue
         if limit is not None and done >= limit:
             break
