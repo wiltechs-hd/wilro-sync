@@ -8,6 +8,8 @@ the original-resolution frames through the feathered target mask.
 from __future__ import annotations
 
 import math
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -19,7 +21,7 @@ from ..flow import add_noise, euler_step, inference_sigmas, sigma_to_timestep
 from ..io.media import AUDIO_SR, pingpong_indices
 from ..models.audio import frame_audio_windows
 from .composite import composite
-from .dscfg import DSCFGConfig, apply_guidance, guidance_scale_map, spatial_map
+from .dscfg import DSCFGConfig, apply_guidance, guidance_scale_map, spatial_map, temporal_weight
 from .planner import Window, blend_weights, plan_windows
 from .region_lock import RegionLock
 from .target import TargetSignals
@@ -45,6 +47,11 @@ class InferenceConfig:
     prompt: str = DEFAULT_PROMPT
     seed: int = 0
     loop_video: bool = True  # ping-pong the video when the audio is longer
+    # speed: drop the no-audio pass in steps where it cannot change the target region (guidance scale is at
+    # its minimum everywhere in the mask; exact inside the mask, the region lock covers the rest)
+    skip_uncond: bool = True
+    cfg_stop_sigma: float = 0.0  # also drop it below this noise level (approximate; 0 = only where exact)
+    profile: bool = False  # collect per-stage timings in LipSyncPipeline.timings
 
 
 def load_infer_config(path: str | None = None) -> InferenceConfig:
@@ -85,12 +92,42 @@ class LipSyncPipeline:
         self.audio_encoder = audio_encoder
         self.device = torch.device(device)
         self.dtype = dtype
+        self.timings: dict[str, float] = {}
+        self._profile = False
+
+    @contextmanager
+    def _timed(self, name: str):
+        """Accumulate wall time of a stage in ``self.timings`` (only with ``cfg.profile``)."""
+        if not self._profile:
+            yield
+            return
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        t0 = time.time()
+        yield
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        self.timings[name] = self.timings.get(name, 0.0) + time.time() - t0
+
+    def merge_lora(self) -> int:
+        """Fold LoRA adapters into the base weights (same output, faster). Returns the number of merged layers."""
+        try:
+            from peft.tuners.lora import LoraLayer
+        except ImportError:  # pragma: no cover
+            return 0
+        n = 0
+        for m in self.transformer.modules():
+            if isinstance(m, LoraLayer) and not m.merged:
+                m.merge()
+                n += 1
+        return n
 
     @classmethod
     def from_pretrained(cls, checkpoint: str, device: str = "cuda", dtype: torch.dtype = torch.bfloat16,
                         vae_dtype: torch.dtype = torch.float32, text_device: str | None = None,
-                        keep_text_encoder: bool = False) -> LipSyncPipeline:
-        """``keep_text_encoder=False`` loads umT5 (~11 GB) only to encode the prompt, then frees it."""
+                        keep_text_encoder: bool = False, merge_lora: bool = True) -> LipSyncPipeline:
+        """``keep_text_encoder=False`` loads umT5 (~11 GB) only to encode the prompt, then frees it.
+        ``merge_lora`` folds LoRA adapters into the weights for inference (same output, faster)."""
         from ..models.audio import WhisperAudioEncoder
         from ..models.backbone import T5TextEncoder, WanVAE
         from ..models.dit_lipsync import WanLipSyncTransformer
@@ -103,8 +140,12 @@ class LipSyncPipeline:
 
         audio = WhisperAudioEncoder(transformer.cfg.audio_model, device=device)
         if keep_text_encoder:
-            return cls(transformer, vae, load_text(), audio, device, dtype)
-        return cls(transformer, vae, None, audio, device, dtype, text_loader=load_text)
+            pipe = cls(transformer, vae, load_text(), audio, device, dtype)
+        else:
+            pipe = cls(transformer, vae, None, audio, device, dtype, text_loader=load_text)
+        if merge_lora:
+            pipe.merge_lora()
+        return pipe
 
     def encode_prompt(self, prompt: str) -> torch.Tensor:
         if prompt not in self._text_cache:
@@ -132,16 +173,34 @@ class LipSyncPipeline:
         text2 = torch.cat([text, text])
         zc2 = torch.cat([z_src, z_src])
         audio2 = torch.cat([audio_tokens, null_tokens])
+        d = cfg.dscfg
         for i in range(cfg.steps):
             s, s1 = sigmas[i], sigmas[i + 1]
-            t = sigma_to_timestep(s).to(dev).expand(2)
-            v_c, v_u = self.transformer(torch.cat([x, x]), zc2, t, text2, audio2).chunk(2)
-            scale = guidance_scale_map(s, g_map, tmask, cfg.dscfg, cfg.tau)
-            v = apply_guidance(v_u.float(), v_c.float(), scale)
+            if self._cond_only(s, cfg, lock is not None):
+                t = sigma_to_timestep(s).to(dev).expand(1)
+                v = self.transformer(x, z_src, t, text, audio_tokens).float()
+            else:
+                t = sigma_to_timestep(s).to(dev).expand(2)
+                v_c, v_u = self.transformer(torch.cat([x, x]), zc2, t, text2, audio2).chunk(2)
+                scale = guidance_scale_map(s, g_map, tmask, d, cfg.tau)
+                v = apply_guidance(v_u.float(), v_c.float(), scale)
             x = euler_step(x, v, s, s1)
             if lock is not None:
                 x = lock(x, s1, i, cfg.steps)
         return x
+
+    @staticmethod
+    def _cond_only(sigma: float, cfg: InferenceConfig, locked: bool) -> bool:
+        """True when the no-audio pass can be skipped at this step.
+
+        Inside the target the scale is max(omega_peak * w(sigma) * G, min_scale) with G <= 1, so once
+        omega_peak * w(sigma) <= min_scale the guided velocity equals the conditional one there. Outside the
+        target (scale 0 = unconditional) the region lock replaces the latent, so only its soft rim differs."""
+        if not (cfg.skip_uncond and locked):
+            return False
+        d = cfg.dscfg
+        peak = d.omega_peak * temporal_weight(sigma, d, cfg.tau) if d.enabled else d.static_scale
+        return peak <= d.min_scale or sigma < cfg.cfg_stop_sigma
 
     # ------------------------------------------------------------------ main entry
     @torch.no_grad()
@@ -157,6 +216,10 @@ class LipSyncPipeline:
         """frames: uint8 [T, H, W, 3]; wav: mono float32 at 16 kHz. Returns uint8 frames whose length
         matches the audio (video ping-ponged if needed, or trimmed)."""
         cfg = cfg or InferenceConfig()
+        self._profile = cfg.profile
+        if cfg.profile:
+            self.timings = {}
+        t_start = time.time()
         t_src, h, w, _ = frames.shape
         n_audio = int(math.floor(len(wav) / AUDIO_SR * fps))
         n = n_audio if cfg.loop_video else min(t_src, n_audio)
@@ -186,6 +249,8 @@ class LipSyncPipeline:
             ready = sorted(f for f in acc if f < next_start)
             if ready:
                 self._flush(out, frames, target, acc, ready, cfg)
+        if cfg.profile:
+            self.timings["total"] = time.time() - t_start
         return out
 
     def _run_window(self, frames, win: Window, target: TargetSignals, win_feats, text, proc_hw, cfg, gen):
@@ -194,7 +259,8 @@ class LipSyncPipeline:
         src = _to_tensor(frames[pad_idx])
         src = F.interpolate(src, size=(ph, pw), mode="bilinear", align_corners=False, antialias=True)
         src = src.permute(1, 0, 2, 3).unsqueeze(0).to(self.device)  # [1, 3, L, H', W']
-        z_src = self.vae.encode(src).to(self.dtype)
+        with self._timed("vae encode"):
+            z_src = self.vae.encode(src).to(self.dtype)
         tf = self.vae.temporal_factor
         tsig = target.slice(win.start, win.end).pad_to(win.length)
         tsig_p = TargetSignals(tsig.resized_mask(ph, pw), tsig.mouth, tsig.face_width, tsig.presence,
@@ -203,8 +269,11 @@ class LipSyncPipeline:
         a = win_feats[torch.as_tensor(pad_idx)].unsqueeze(0).to(self.device)
         tokens = self.transformer.encode_audio(a)
         null = self.transformer.null_audio(1, tokens.shape[1]).to(tokens.dtype)
-        x = self._denoise_window(z_src, text, tokens, null, mask_lat, mouth_lat, fw_lat, tsig.full_frame, cfg, gen)
-        video = self.vae.decode(x)[0].permute(1, 0, 2, 3)  # [L, 3, H', W']
+        with self._timed("denoise"):
+            x = self._denoise_window(z_src, text, tokens, null, mask_lat, mouth_lat, fw_lat, tsig.full_frame,
+                                     cfg, gen)
+        with self._timed("vae decode"):
+            video = self.vae.decode(x)[0].permute(1, 0, 2, 3)  # [L, 3, H', W']
         return video[: win.real_len].float().cpu()
 
     def _flush(self, out, frames, target: TargetSignals, acc, ready, cfg: InferenceConfig):

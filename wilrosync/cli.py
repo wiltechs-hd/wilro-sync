@@ -1,4 +1,4 @@
-"""Command line: ``wilro-sync infer ...`` and ``wilro-sync train ...``.
+"""Command line: ``wilro-sync infer ...``, ``wilro-sync infer-face ...`` and ``wilro-sync train ...``.
 
 Multi-GPU training: ``accelerate launch -m wilrosync.cli train --config configs/train/stage_a.yaml``.
 """
@@ -43,6 +43,33 @@ def cmd_infer(a: argparse.Namespace) -> None:
     out = pipe(frames, fps, wav, target=target, cfg=cfg)
     write_video(a.out, out, fps, audio_path=a.audio)
     print(f"wrote {a.out} ({len(out)} frames)")
+
+
+def cmd_infer_face(a: argparse.Namespace) -> None:
+    import torch
+
+    from .pipeline.face import face_infer_config, lipsync_face
+    from .pipeline.lipsync import LipSyncPipeline
+    from .pipeline.oval import FIXED_DEFAULT, FIXED_OLD, TrackConfig
+
+    oval = {"track": "track", "fixed": dict(FIXED_DEFAULT), "fixed_old": dict(FIXED_OLD)}[a.oval]
+    track = TrackConfig(**{k: getattr(a, k) for k in ("width", "bottom", "top", "spread", "spread_up")})
+    pipe = None
+    if not a.preview:
+        if not (a.ckpt and a.audio):
+            raise SystemExit("--ckpt and --audio are required (except with --preview)")
+        dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[a.dtype]
+        pipe = LipSyncPipeline.from_pretrained(
+            a.ckpt, device=a.device, dtype=dtype, text_device=a.text_device,
+            vae_dtype=torch.bfloat16 if a.vae_bf16 else torch.float32)
+    overrides = {k: getattr(a, k) for k in ("steps", "tau", "seed", "window", "overlap") if getattr(a, k) is not None}
+    if a.omega_peak is not None:
+        overrides["dscfg"] = {"omega_peak": a.omega_peak}
+    cfg = face_infer_config(**overrides, profile=a.profile)
+    lipsync_face(pipe, a.video, a.audio, a.out, bbox=a.bbox, cfg=cfg, size=a.size, scale=a.scale, mode=a.mode,
+                 loop=a.loop, oval=oval, track=track, preview=a.preview)
+    if pipe is not None and a.profile:
+        print("timings (s):", {k: round(v, 1) for k, v in pipe.timings.items()})
 
 
 def cmd_train(a: argparse.Namespace) -> None:
@@ -107,6 +134,37 @@ def main(argv: list[str] | None = None) -> None:
     i.add_argument("--text-device", default=None, help="e.g. cpu to keep umT5 off the GPU")
     i.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     i.set_defaults(func=cmd_infer)
+
+    fz = sub.add_parser("infer-face", help="lip-sync through a face crop with a tracked mouth oval "
+                        "(best settings by default; see docs/inference_face.md)")
+    fz.add_argument("--ckpt", help="checkpoint directory (use <ckpt>/ema for EMA weights); not needed with --preview")
+    fz.add_argument("--video", required=True)
+    fz.add_argument("--audio", default=None)
+    fz.add_argument("--out", required=True)
+    fz.add_argument("--bbox", type=_parse_bbox, help="target face box x0,y0,x1,y1 in the first frame")
+    fz.add_argument("--mode", default="lower", choices=["lower", "full"])
+    fz.add_argument("--loop", default="reverse", choices=["reverse", "restart", "hold", "trim"])
+    fz.add_argument("--oval", default="track", choices=["track", "fixed", "fixed_old"])
+    fz.add_argument("--width", type=float, default=2.2, help="tracked oval: half-width x half the mouth width")
+    fz.add_argument("--bottom", type=float, default=0.4, help="tracked oval: room below the chin")
+    fz.add_argument("--top", type=float, default=0.3, help="tracked oval: 0 = nose, 1 = upper lip")
+    fz.add_argument("--spread", type=float, default=0.0, help="tracked oval: wide outer soft edge (0 = off)")
+    fz.add_argument("--spread-up", type=float, default=0.0, help="0 = spread stops at the nose, 1 = under the eyes")
+    fz.add_argument("--size", type=int, default=512, help="face crop size (training: 512)")
+    fz.add_argument("--scale", type=float, default=1.8, help="crop window / face size (training: 1.8)")
+    fz.add_argument("--steps", type=int, default=None, help="default 10")
+    fz.add_argument("--tau", type=float, default=None, help="default 0.92")
+    fz.add_argument("--omega-peak", type=float, default=None, help="default 4.5")
+    fz.add_argument("--window", type=int, default=None, help="default 49")
+    fz.add_argument("--overlap", type=int, default=None, help="default 0")
+    fz.add_argument("--seed", type=int, default=None)
+    fz.add_argument("--preview", action="store_true", help="only write the crop with the mask drawn (no model)")
+    fz.add_argument("--vae-bf16", action="store_true", help="bf16 VAE: faster, tiny colour/detail change")
+    fz.add_argument("--profile", action="store_true", help="print per-stage timings")
+    fz.add_argument("--device", default="cuda")
+    fz.add_argument("--text-device", default=None)
+    fz.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
+    fz.set_defaults(func=cmd_infer_face)
 
     t = sub.add_parser("train", help="train the lip-sync DiT")
     t.add_argument("--config", default=None)

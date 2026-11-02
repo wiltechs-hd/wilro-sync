@@ -19,6 +19,7 @@ Outputs (per video):
 from __future__ import annotations
 
 import os
+import shutil
 import urllib.request
 from dataclasses import asdict, dataclass
 
@@ -38,15 +39,29 @@ def weights_dir() -> str:
     return os.environ.get("WILROSYNC_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "wilrosync"))
 
 
-def download_weight(name: str, cache_dir: str | None = None) -> str:
-    """Download a pretrained SyncNet / S3FD weight file once and return its local path."""
+# the same files on the Hugging Face Hub, used when the Oxford server is unreachable
+HF_MIRROR = ("ByteDance/LatentSync-1.5", "auxiliary")
+
+
+def download_weight(name: str, cache_dir: str | None = None, timeout: float = 30.0) -> str:
+    """Download a pretrained SyncNet / S3FD weight file once and return its local path.
+
+    Tries the original Oxford URL first, then the Hugging Face mirror (``HF_MIRROR``)."""
     cache_dir = cache_dir or weights_dir()
     path = os.path.join(cache_dir, name)
-    if not os.path.isfile(path):
-        os.makedirs(cache_dir, exist_ok=True)
-        tmp = path + ".part"
-        urllib.request.urlretrieve(WEIGHT_URLS[name], tmp)
-        os.replace(tmp, path)
+    if os.path.isfile(path):
+        return path
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp = path + ".part"
+    try:
+        with urllib.request.urlopen(WEIGHT_URLS[name], timeout=timeout) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+    except OSError as e:
+        from huggingface_hub import hf_hub_download
+
+        print(f"{name}: {WEIGHT_URLS[name]} failed ({e}); using the Hugging Face mirror {HF_MIRROR[0]}")
+        shutil.copyfile(hf_hub_download(HF_MIRROR[0], f"{HF_MIRROR[1]}/{name}"), tmp)
+    os.replace(tmp, path)
     return path
 
 
