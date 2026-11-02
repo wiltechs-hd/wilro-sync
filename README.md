@@ -47,6 +47,17 @@ session can resume.
 
 ## Inference
 
+Recommended: face-crop mode with a tracked mouth oval and the tuned settings
+([docs/inference_face.md](docs/inference_face.md)):
+
+```bash
+pip install -e ".[face]"
+wilro-sync infer-face --ckpt runs/first_model/step_0054800 --video in.mp4 --audio speech.wav --out out.mp4
+wilro-sync infer-face --video in.mp4 --out mask.mp4 --preview      # check the mouth mask (no model)
+```
+
+Whole-frame / bounding-box mode (the original pipeline):
+
 ```bash
 # single speaker
 wilro-sync infer --ckpt runs/stage_a/step_0080000 --video in.mp4 --audio speech.wav --out out.mp4

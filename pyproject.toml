@@ -41,6 +41,7 @@ Paper = "https://arxiv.org/abs/2505.21448"
 dev = ["pytest>=8", "ruff>=0.6"]
 train = ["bitsandbytes>=0.43"]
 data = ["yt-dlp>=2025.1"]
+face = ["mediapipe>=0.10.30"]  # tracked mouth oval for `wilro-sync infer-face`
 
 [project.scripts]
 wilro-sync = "wilrosync.cli:main"
