@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--steps", type=int, default=None, help="default 10")
     fz.add_argument("--tau", type=float, default=None, help="default 0.92")
     fz.add_argument("--omega-peak", type=float, default=None, help="default 4.5")
-    fz.add_argument("--window", type=int, default=None, help="default 49")
+    fz.add_argument("--window", type=int, default=None, help="default 81")
     fz.add_argument("--overlap", type=int, default=None, help="default 0")
     fz.add_argument("--seed", type=int, default=None)
     fz.add_argument("--preview", action="store_true", help="only write the crop with the mask drawn (no model)")

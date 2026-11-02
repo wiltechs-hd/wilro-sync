@@ -204,3 +204,9 @@ def test_lipsync_face_end_to_end(tmp_path, tiny_base, tiny_cfg):
     src, _ = read_video(video)
     assert synced.shape == (18, 96, 128, 3)  # follows the audio (ping-pong)
     assert np.abs(synced[:12, :, :20].astype(int) - src[:, :, :20].astype(int)).mean() < 3  # far from the face
+
+
+def test_face_defaults_match_the_tuned_settings():
+    cfg = face_infer_config()
+    assert (cfg.steps, cfg.window, cfg.overlap, cfg.tau, cfg.max_side) == (10, 81, 0, 0.92, 512)
+    assert face_infer_config(window=49, dscfg={"omega_peak": 3.5}).dscfg.omega_peak == 3.5
