@@ -43,9 +43,18 @@ The weights for face detection and SyncNet download on first use into `$WILROSYN
 | `--window` / `--overlap` | 81 / 0 | Frames per generation window (1 + 4k) / frames blended between windows. 81 synced much better than the 49-frame training length (7.24 vs 4.84 LSE-C on xlf, 54.8k); all results below use 81. |
 | `--loop` | `reverse` | Audio longer than the video: `reverse` (ping-pong), `restart`, `hold`, `trim`. |
 | `--size` / `--scale` | 512 / 1.8 | Crop size and crop window relative to the face (training layout; keep). |
+| `--crop` | `fixed` | `fixed`: one crop window for the whole clip. `track`: the window follows the face every frame (smoothed over `--crop-smooth` 7 frames, detection every frame), so the face stays large and centred like in training. Use `track` for fast head motion; it isn't measured as the default yet. |
 | `--oval` | `track` | `track`: follows the mouth. `fixed` / `fixed_old`: a static ellipse. |
 | `--vae-bf16` | off | bf16 VAE: about 2× faster encode/decode, tiny colour/detail change. |
 | `--profile` | off | Print time spent in VAE encode, denoising, VAE decode. |
+
+### Fast head motion
+
+With `--crop fixed` the window must cover every position of the head, so a moving face ends up small and off-centre
+in the 512 crop (the warning `face moves 0.7x its size` points to this). `--crop track` keeps a constant window of
+1.8 × the face centred on it in every frame and pastes each frame back at its own position. The face tracker also
+follows fast motion now: when the box overlap with the previous detection drops below 0.3, it takes the nearest
+face of similar size within one face width instead of losing the track.
 
 ### Tracked oval
 

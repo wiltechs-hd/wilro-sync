@@ -210,3 +210,95 @@ def test_face_defaults_match_the_tuned_settings():
     cfg = face_infer_config()
     assert (cfg.steps, cfg.window, cfg.overlap, cfg.tau, cfg.max_side) == (10, 81, 0, 0.92, 512)
     assert face_infer_config(window=49, dscfg={"omega_peak": 3.5}).dscfg.omega_peak == 3.5
+
+
+# ----------------------------------------------------------------------------- moving crop window
+class _SquareDetector:
+    """Finds the white square drawn into the synthetic frames (the 'face')."""
+
+    def detect(self, frame, **kw):
+        ys, xs = np.nonzero(frame[..., 0] > 200)
+        if len(xs) == 0:
+            return np.zeros((0, 5))
+        return np.array([[xs.min(), ys.min(), xs.max() + 1, ys.max() + 1, 0.99]], float)
+
+
+def _moving_face_frames(t=24, h=120, w=200, face=30):
+    frames = np.full((t, h, w, 3), 40, np.uint8)
+    xs = (20 + np.arange(t) * 5).astype(int)  # moves 5 px per frame: 115 px = ~4x its size
+    for i, x in enumerate(xs):
+        frames[i, 40:40 + face, x:x + face] = 255
+    return frames, xs
+
+
+def test_tracked_crop_keeps_the_face_centred():
+    from wilrosync.pipeline.face import crop_faces, find_face_window
+
+    frames, _ = _moving_face_frames()
+    fixed = find_face_window(frames, None, 1.8, _SquareDetector(), crop="fixed")
+    moving = find_face_window(frames, None, 1.8, _SquareDetector(), crop="track", smooth=3)
+    assert not fixed.moving and moving.moving and moving.side < fixed.side  # no room for motion needed
+
+    def centre_x(crops):
+        return np.array([np.nonzero(c[..., 0] > 200)[1].mean() / c.shape[1] for c in crops])
+
+    cf, ct = centre_x(crop_faces(frames, fixed, 64)), centre_x(crop_faces(frames, moving, 64))
+    assert np.ptp(cf) > 0.4  # the face slides across the fixed crop
+    assert np.ptp(ct[2:-2]) < 0.05 and abs(ct[2:-2].mean() - 0.5) < 0.05  # stays centred in the tracked crop
+
+
+def test_tracked_crop_paste_back_round_trip():
+    from wilrosync.pipeline.face import crop_faces, find_face_window, paste_faces
+
+    frames, _ = _moving_face_frames()
+    win = find_face_window(frames, None, 1.8, _SquareDetector(), crop="track", smooth=3)
+    crops = crop_faces(frames, win, win.side)  # no resize: the round trip should be exact
+    ones = lambda s, e: torch.ones(e - s, win.side, win.side)  # noqa: E731
+    out = paste_faces(frames.copy(), crops, win, ones, color_match=False)
+    assert np.abs(out.astype(int) - frames.astype(int)).max() <= 1
+    # pasting a black crop only changes pixels inside each frame's own window
+    out = paste_faces(frames.copy(), np.zeros_like(crops), win, ones, color_match=False)
+    for t in (0, 12, 23):
+        x0, y0, x1, y1, _, _ = win.box(t)
+        assert out[t, y0:y1, x0:x1].max() == 0
+        rest = out[t].copy()
+        rest[y0:y1, x0:x1] = frames[t, y0:y1, x0:x1]
+        assert np.array_equal(rest, frames[t])
+
+
+def test_tracked_crop_paste_follows_the_source_frame():
+    from wilrosync.pipeline.face import FaceWindow, paste_faces
+
+    frames = np.zeros((3, 40, 60, 3), np.uint8)
+    win = FaceWindow([0, 20, 40], [0, 10, 20], 20, (60, 40))
+    gen = np.full((2, 20, 20, 3), 255, np.uint8)
+    ones = lambda s, e: torch.ones(e - s, 20, 20)  # noqa: E731
+    out = paste_faces(frames[[2, 0]].copy(), gen, win, ones, color_match=False, src_idx=[2, 0])
+    assert out[0, 20:40, 40:60].min() == 255 and out[0, :20, :40].max() == 0  # output 0 = source frame 2
+    assert out[1, 0:20, 0:20].min() == 255 and out[1, 20:, 20:].max() == 0
+
+
+def test_track_face_follows_fast_motion():
+    from wilrosync.eval.syncnet import track_face
+
+    frames, xs = _moving_face_frames()
+    boxes = track_face(_SquareDetector(), frames[::5])  # 25 px between detections on a 30 px face
+    assert boxes is not None and np.allclose(boxes[:, 0], xs[::5], atol=1)
+
+
+def test_lipsync_face_tracked_crop_end_to_end(tmp_path, tiny_base, tiny_cfg):
+    from test_smoke import _Audio, _Text, _tiny_vae
+
+    from wilrosync.io.media import read_video, write_video, write_wav
+    from wilrosync.models.dit_lipsync import WanLipSyncTransformer
+
+    frames, _ = _moving_face_frames(t=12, h=96, w=160)
+    video, audio = str(tmp_path / "move.mp4"), str(tmp_path / "a.wav")
+    write_video(video, frames, 25.0)
+    write_wav(audio, np.zeros(int(16000 * 12 / 25), np.float32))
+    model = WanLipSyncTransformer(tiny_base, tiny_cfg).eval()
+    pipe = LipSyncPipeline(model, _tiny_vae(), _Text(), _Audio(), device="cpu", dtype=torch.float32)
+    out = lipsync_face(pipe, video, audio, str(tmp_path / "out.mp4"), cfg=face_infer_config(steps=2, window=9),
+                       size=64, detector=_SquareDetector(), landmarker=_FakeLandmarker(), crop="track")
+    synced, _ = read_video(out)
+    assert synced.shape == (12, 96, 160, 3)

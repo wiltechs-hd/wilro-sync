@@ -67,7 +67,8 @@ def cmd_infer_face(a: argparse.Namespace) -> None:
         overrides["dscfg"] = {"omega_peak": a.omega_peak}
     cfg = face_infer_config(**overrides, profile=a.profile)
     lipsync_face(pipe, a.video, a.audio, a.out, bbox=a.bbox, cfg=cfg, size=a.size, scale=a.scale, mode=a.mode,
-                 loop=a.loop, oval=oval, track=track, preview=a.preview)
+                 loop=a.loop, oval=oval, track=track, preview=a.preview, crop=a.crop, crop_smooth=a.crop_smooth,
+                 det_every=a.det_every)
     if pipe is not None and a.profile:
         print("timings (s):", {k: round(v, 1) for k, v in pipe.timings.items()})
 
@@ -150,6 +151,10 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--top", type=float, default=0.3, help="tracked oval: 0 = nose, 1 = upper lip")
     fz.add_argument("--spread", type=float, default=0.0, help="tracked oval: wide outer soft edge (0 = off)")
     fz.add_argument("--spread-up", type=float, default=0.0, help="0 = spread stops at the nose, 1 = under the eyes")
+    fz.add_argument("--crop", default="fixed", choices=["fixed", "track"],
+                    help="fixed: one crop window for the clip; track: the window follows the face (fast head motion)")
+    fz.add_argument("--crop-smooth", type=int, default=7, help="tracked window: smoothing in frames")
+    fz.add_argument("--det-every", type=int, default=None, help="face detection every n-th frame (5 fixed / 1 track)")
     fz.add_argument("--size", type=int, default=512, help="face crop size (training: 512)")
     fz.add_argument("--scale", type=float, default=1.8, help="crop window / face size (training: 1.8)")
     fz.add_argument("--steps", type=int, default=None, help="default 10")
