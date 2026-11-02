@@ -37,7 +37,8 @@ LOOPS = ("reverse", "restart", "hold", "trim")
 
 def face_infer_config(**overrides) -> InferenceConfig:
     """Inference settings tuned for face-crop mode (LSE-C sweeps, see docs/inference_face.md)."""
-    cfg = InferenceConfig(steps=10, tau=0.92, window=49, overlap=0, max_side=512, loop_video=False)
+    # window 81 (not the 49-frame training length): 7.24 vs 4.84 LSE-C on an unseen clip, same checkpoint and settings
+    cfg = InferenceConfig(steps=10, tau=0.92, window=81, overlap=0, max_side=512, loop_video=False)
     for k, v in overrides.items():
         if k == "dscfg":
             for dk, dv in v.items():
@@ -172,7 +173,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
              (cx, cy, rx, ry, feather; e.g. ``oval.FIXED_OLD``).
     loop:    reverse | restart | hold | trim, when the audio is longer than the video.
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
-    cfg:     inference settings; default ``face_infer_config()`` (10 steps, 49-frame windows, no overlap)."""
+    cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows, no overlap)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
     frames, _ = read_video(video, fps=FPS)

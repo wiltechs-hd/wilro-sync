@@ -40,7 +40,7 @@ The weights for face detection and SyncNet download on first use into `$WILROSYN
 | `--steps` | 10 | Denoising steps. 10 synced better than both 5 and 20 (see results). |
 | `--tau` | 0.92 | Noise level at the start (progressive noise init). |
 | `--omega-peak` | 4.5 | Audio guidance strength on the mouth. |
-| `--window` / `--overlap` | 49 / 0 | Frames per generation window / frames blended between windows. |
+| `--window` / `--overlap` | 81 / 0 | Frames per generation window (1 + 4k) / frames blended between windows. 81 synced much better than the 49-frame training length (7.24 vs 4.84 LSE-C on xlf, 54.8k); all results below use 81. |
 | `--loop` | `reverse` | Audio longer than the video: `reverse` (ping-pong), `restart`, `hold`, `trim`. |
 | `--size` / `--scale` | 512 / 1.8 | Crop size and crop window relative to the face (training layout; keep). |
 | `--oval` | `track` | `track`: follows the mouth. `fixed` / `fixed_old`: a static ellipse. |
@@ -78,11 +78,13 @@ memorisation more than quality). Differences under about 0.1 are noise.
 
 ## Speed
 
-Per 49-frame window (about 2 s of video), each step runs the transformer once on two copies of the latent (with
+Per 81-frame window (about 3 s of video), each step runs the transformer once on two copies of the latent (with
 and without audio, for guidance), so 10 steps = 20 transformer passes; the VAE encodes and decodes once.
 Built in:
 
 * LoRA merged into the weights at load time (`merge_lora=True`): same output, faster.
+  Checked on xlf at 54.8k: 7.24 unmerged, 7.22 merged (noise).
 * The no-audio copy is skipped in steps where guidance can no longer change the mouth
   (`omega_peak · σ^γ ≤ min_scale`, the last 2 of 10 steps at the defaults): identical inside the mask, only the
-  rim of the region lock differs. `InferenceConfig.skip_uncond` (on), `cfg_stop_sigma` (0 = only where exact).
+  rim of the region lock differs (xlf at 54.8k: 7.24 without, 7.29 with). `InferenceConfig.skip_uncond` (on),
+  `cfg_stop_sigma` (0 = only where exact).
