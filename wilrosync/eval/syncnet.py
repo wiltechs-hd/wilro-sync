@@ -211,8 +211,14 @@ def track_face(detector: S3FDDetector, frames: np.ndarray, det_every: int = 1, m
         else:
             ious = np.array([_iou(prev, d[:4]) for d in dets])
             k = int(np.argmax(ious))
-            if ious[k] < 0.3:
-                continue
+            if ious[k] < 0.3:  # fast motion: accept the nearest face of similar size within one face width
+                size = max(prev[2] - prev[0], prev[3] - prev[1])
+                dist = np.hypot((dets[:, 0] + dets[:, 2] - prev[0] - prev[2]) / 2,
+                                (dets[:, 1] + dets[:, 3] - prev[1] - prev[3]) / 2)
+                ratio = np.maximum(dets[:, 2] - dets[:, 0], dets[:, 3] - dets[:, 1]) / max(size, 1e-6)
+                k = int(np.argmin(dist))
+                if dist[k] > size or not 0.6 < ratio[k] < 1.6:
+                    continue
         prev = dets[k, :4]
         keys.append(i)
         kboxes.append(prev)

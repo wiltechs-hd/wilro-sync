@@ -72,79 +72,122 @@ def loop_indices(num_frames: int, length: int, loop: str = "reverse", pause: int
 
 @dataclass
 class FaceWindow:
-    """Fixed crop window in source pixels: square (x, y, side), possibly partly outside the frame."""
+    """Square crop window in source pixels, per source frame: top-left ``x[t], y[t]`` and a constant ``side``.
 
-    x: int
-    y: int
+    ``crop="fixed"`` uses the same position for every frame; ``crop="track"`` follows the face. The window may
+    extend past the frame (that part is grey in the crop and left untouched when pasting back)."""
+
+    x: np.ndarray
+    y: np.ndarray
     side: int
     frame_wh: tuple[int, int]
 
-    @property
-    def inside(self) -> tuple[int, int, int, int]:
-        """(x0, y0, x1, y1): the part of the window inside the frame."""
-        w, h = self.frame_wh
-        return max(self.x, 0), max(self.y, 0), min(self.x + self.side, w), min(self.y + self.side, h)
+    def __post_init__(self) -> None:
+        self.x = np.asarray(self.x, dtype=np.int64).reshape(-1)
+        self.y = np.asarray(self.y, dtype=np.int64).reshape(-1)
 
     @property
-    def offset(self) -> tuple[int, int]:
-        x0, y0, _, _ = self.inside
-        return x0 - self.x, y0 - self.y
+    def moving(self) -> bool:
+        return len(self.x) > 1 and (np.ptp(self.x) > 0 or np.ptp(self.y) > 0)
+
+    def box(self, t: int) -> tuple[int, int, int, int, int, int]:
+        """(x0, y0, x1, y1, ox, oy) for source frame ``t``: the part inside the frame and its offset in the window."""
+        x, y = int(self.x[t % len(self.x)]), int(self.y[t % len(self.y)])
+        w, h = self.frame_wh
+        x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + self.side, w), min(y + self.side, h)
+        return x0, y0, x1, y1, x0 - x, y0 - y
 
 
 _DETECTOR: dict = {}
 
 
-def find_face_window(frames: np.ndarray, bbox=None, scale: float = 1.8, detector=None,
-                     det_every: int = 5) -> FaceWindow:
-    """Track the target face (``bbox`` in the first frame, else the largest face) and return one crop window."""
+def smooth_track(values: np.ndarray, k: int) -> np.ndarray:
+    """Centred moving average over ``k`` frames (edges padded), no lag."""
+    if k <= 1 or len(values) < 2:
+        return values.astype(np.float64)
+    pad = np.pad(values.astype(np.float64), (k // 2, k - 1 - k // 2), mode="edge")
+    return np.convolve(pad, np.ones(k) / k, "valid")
+
+
+def find_face_window(frames: np.ndarray, bbox=None, scale: float = 1.8, detector=None, det_every: int | None = None,
+                     crop: str = "fixed", smooth: int = 7, y_shift: float = 0.1) -> FaceWindow:
+    """Track the target face (``bbox`` in the first frame, else the largest face) and return the crop window.
+
+    crop="fixed": one square for the whole clip, covering all head motion (detection every 5th frame).
+    crop="track": the square follows the face every frame (detection every frame, centre smoothed over ``smooth``
+                  frames), constant size ``scale`` x face, so the face stays large and centred as in training."""
     from ..data.face_crop import square_window
     from ..eval.syncnet import S3FDDetector, track_face
 
+    if crop not in ("fixed", "track"):
+        raise ValueError("crop must be 'fixed' or 'track'")
+    step = det_every or (1 if crop == "track" else 5)
     det = detector or _DETECTOR.setdefault("s3fd", S3FDDetector())
-    boxes = track_face(det, frames[::det_every], init_box=bbox)
+    boxes = track_face(det, frames[::step], init_box=bbox)
     if boxes is None:
         raise RuntimeError("no stable face found; pass bbox=(x0, y0, x1, y1)")
-    h, w = frames.shape[1:3]
-    face = float(np.median(np.maximum(boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1])))
-    motion = max(np.ptp((boxes[:, 0] + boxes[:, 2]) / 2), np.ptp((boxes[:, 1] + boxes[:, 3]) / 2))
-    if motion > 0.6 * face:
-        print(f"warning: face moves {motion / face:.1f}x its size; a fixed crop may cut it")
-    x, y, side = square_window(boxes, (w, h), scale)
-    print(f"face {face:.0f}px -> crop window x={x} y={y} side={side}")
-    return FaceWindow(x, y, side, (w, h))
+    t, h, w = frames.shape[:3]
+    size = np.maximum(boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1])
+    face = float(np.median(size))
+    cx, cy = (boxes[:, 0] + boxes[:, 2]) / 2, (boxes[:, 1] + boxes[:, 3]) / 2
+    motion = max(np.ptp(cx), np.ptp(cy))
+    if crop == "fixed":
+        if motion > 0.6 * face:
+            print(f"warning: face moves {motion / face:.1f}x its size; try crop='track'")
+        x, y, side = square_window(boxes, (w, h), scale, y_shift)
+        print(f"face {face:.0f}px -> fixed crop window x={x} y={y} side={side}")
+        return FaceWindow([x], [y], side, (w, h))
+    # per-frame centre (interpolated between detections), smoothed; constant size
+    ts = np.arange(0, t, step)[: len(boxes)]
+    cx = smooth_track(np.interp(np.arange(t), ts, cx), smooth)
+    cy = smooth_track(np.interp(np.arange(t), ts, cy), smooth)
+    side = int(round(scale * float(np.percentile(size, 90)))) // 2 * 2
+    xs = np.round(cx - side / 2).astype(np.int64)
+    ys = np.round(cy + y_shift * face - side / 2).astype(np.int64)
+    print(f"face {face:.0f}px (moves {motion / face:.1f}x its size) -> tracked crop window side={side}, "
+          f"smoothed over {smooth} frames")
+    return FaceWindow(xs, ys, side, (w, h))
 
 
-def crop_faces(frames: np.ndarray, win: FaceWindow, size: int, pad_value: float = 110.0) -> np.ndarray:
+def crop_faces(frames: np.ndarray, win: FaceWindow, size: int, pad_value: float = 110.0,
+               chunk: int = 32) -> np.ndarray:
     """[T, H, W, 3] -> [T, size, size, 3] uint8 crops (grey where the window leaves the frame)."""
-    x0, y0, x1, y1 = win.inside
-    ox, oy = win.offset
     out = np.empty((len(frames), size, size, 3), np.uint8)
-    for s in range(0, len(frames), 32):
-        c = torch.full((min(32, len(frames) - s), 3, win.side, win.side), pad_value)
-        c[:, :, oy:oy + y1 - y0, ox:ox + x1 - x0] = torch.from_numpy(
-            frames[s:s + 32, y0:y1, x0:x1]).permute(0, 3, 1, 2).float()
+    for s in range(0, len(frames), chunk):
+        n = min(chunk, len(frames) - s)
+        c = torch.full((n, 3, win.side, win.side), pad_value)
+        for j in range(n):
+            x0, y0, x1, y1, ox, oy = win.box(s + j)
+            if x1 > x0 and y1 > y0:
+                c[j, :, oy:oy + y1 - y0, ox:ox + x1 - x0] = torch.from_numpy(
+                    frames[s + j, y0:y1, x0:x1]).permute(2, 0, 1).float()
         c = F.interpolate(c, size=(size, size), mode="bilinear", antialias=True, align_corners=False)
-        out[s:s + 32] = c.round().clamp(0, 255).byte().permute(0, 2, 3, 1).numpy()
+        out[s:s + n] = c.round().clamp(0, 255).byte().permute(0, 2, 3, 1).numpy()
     return out
 
 
 def paste_faces(frames: np.ndarray, gen: np.ndarray, win: FaceWindow, masks, feather: float = 0.0,
-                color_match: bool = True, chunk: int = 16) -> np.ndarray:
+                color_match: bool = True, chunk: int = 16, src_idx=None) -> np.ndarray:
     """Blend generated crops ``gen`` [N, S, S, 3] into ``frames`` [N, H, W, 3] (in place, also returned).
 
-    ``masks(start, end)`` returns the [n, side, side] blend masks for those output frames."""
-    x0, y0, x1, y1 = win.inside
-    ox, oy = win.offset
+    ``masks(start, end)`` returns the [n, side, side] blend masks for those output frames; ``src_idx[k]`` is the
+    source frame of output frame k (sets the window position when the window moves)."""
+    src_idx = np.arange(len(gen)) if src_idx is None else np.asarray(src_idx)
     side = win.side
     for s in range(0, len(gen), chunk):
         n = len(gen[s:s + chunk])
-        m = masks(s, s + n)[:, oy:oy + y1 - y0, ox:ox + x1 - x0]
-        g = torch.from_numpy(gen[s:s + n]).permute(0, 3, 1, 2).float() / 127.5 - 1
-        g = F.interpolate(g, size=(side, side), mode="bicubic", align_corners=False).clamp(-1, 1)
-        g = g[:, :, oy:oy + y1 - y0, ox:ox + x1 - x0]
-        src = torch.from_numpy(frames[s:s + n, y0:y1, x0:x1]).permute(0, 3, 1, 2).float() / 127.5 - 1
-        comp = composite(g, src, m, feather_px=feather, color_match=color_match)
-        frames[s:s + n, y0:y1, x0:x1] = ((comp + 1) * 127.5).round().clamp(0, 255).byte().permute(0, 2, 3, 1).numpy()
+        m_all = masks(s, s + n)
+        g_all = torch.from_numpy(gen[s:s + n]).permute(0, 3, 1, 2).float() / 127.5 - 1
+        g_all = F.interpolate(g_all, size=(side, side), mode="bicubic", align_corners=False).clamp(-1, 1)
+        for j in range(n):
+            x0, y0, x1, y1, ox, oy = win.box(int(src_idx[s + j]))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            m = m_all[j:j + 1, oy:oy + y1 - y0, ox:ox + x1 - x0]
+            g = g_all[j:j + 1, :, oy:oy + y1 - y0, ox:ox + x1 - x0]
+            src = torch.from_numpy(frames[s + j, y0:y1, x0:x1]).permute(2, 0, 1)[None].float() / 127.5 - 1
+            comp = composite(g, src, m, feather_px=feather, color_match=color_match)
+            frames[s + j, y0:y1, x0:x1] = ((comp[0] + 1) * 127.5).round().clamp(0, 255).byte().permute(1, 2, 0).numpy()
     return frames
 
 
@@ -165,20 +208,24 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  cfg: InferenceConfig | None = None, size: int = 512, scale: float = 1.8, mode: str = "lower",
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
-                 landmarker: FaceLandmarker | None = None) -> str:
+                 landmarker: FaceLandmarker | None = None, crop: str = "fixed", crop_smooth: int = 7,
+                 det_every: int | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
     mode:    "lower" (only the mouth mask is generated) or "full" (the whole crop).
     oval:    "track" (follows the mouth, ``track`` sets its shape) or a dict for a fixed ellipse
              (cx, cy, rx, ry, feather; e.g. ``oval.FIXED_OLD``).
     loop:    reverse | restart | hold | trim, when the audio is longer than the video.
+    crop:    "fixed" (one window for the clip) or "track" (the window follows the face; for fast head motion).
+             ``crop_smooth``: frames of smoothing of the tracked window; ``det_every``: detect every n-th frame
+             (default 5 for fixed, 1 for track).
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
     cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows, no overlap)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
     frames, _ = read_video(video, fps=FPS)
     t_src = len(frames)
-    win = find_face_window(frames, bbox, scale, detector)
+    win = find_face_window(frames, bbox, scale, detector, det_every, crop, crop_smooth)
     crops = crop_faces(frames, win, size)
 
     tracked: TrackedOval | None = None
@@ -229,7 +276,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
         m = masks_for(idx[s:e], MASK_RES)
         return F.interpolate(m[:, None], size=(win.side, win.side), mode="bilinear", align_corners=False)[:, 0]
 
-    result = paste_faces(frames[idx[:len(res)]].copy(), res, win, paste_masks, feather)
+    result = paste_faces(frames[idx[:len(res)]].copy(), res, win, paste_masks, feather, src_idx=idx[:len(res)])
     write_video(out, result, FPS, audio_path=audio)
     print(f"{len(result)} frames -> {out}")
     return out
