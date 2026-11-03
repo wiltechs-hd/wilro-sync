@@ -43,7 +43,7 @@ The weights for face detection and SyncNet download on first use into `$WILROSYN
 | `--window` / `--overlap` | 81 / 0 | Frames per generation window (1 + 4k) / frames blended between windows. 81 synced much better than the 49-frame training length (7.24 vs 4.84 LSE-C on xlf, 54.8k); all results below use 81. |
 | `--loop` | `reverse` | Audio longer than the video: `reverse` (ping-pong), `restart`, `hold`, `trim`. |
 | `--size` / `--scale` | 512 / 1.8 | Crop size and crop window relative to the face (training layout; keep). |
-| `--crop` | `fixed` | `fixed`: one crop window for the whole clip. `track`: the window follows the face like a lazy camera (still while the face stays within `--crop-deadzone` 0.15 × face of it, then moves just enough; smoothed over `--crop-smooth` 9 frames). `auto`: `track` only when the face moves more than half its size. |
+| `--crop` | `auto` | `auto` (default): the fixed window when the head moves less than half the face size over the clip, otherwise `track`. `fixed`: one crop window for the whole clip. `track`: the window follows the face like a lazy camera (still while the face stays within `--crop-deadzone` 0.15 × face of it, then moves just enough; smoothed over `--crop-smooth` 9 frames). |
 | `--oval` | `track` | `track`: follows the mouth. `fixed` / `fixed_old`: a static ellipse. |
 | `--vae-bf16` | off | bf16 VAE: about 2× faster encode/decode, tiny colour/detail change. |
 | `--profile` | off | Print time spent in VAE encode, denoising, VAE decode. |
@@ -57,7 +57,20 @@ in the 512 crop (the warning `face moves 0.7x its size` points to this). `--crop
 Measured (54.8k, LSE-C, fixed → first `track` version that re-centred on every frame): demo2 (moves 0.7× its size)
 6.01 → 7.05; xlf (0.1×) 7.26 → 7.25; demo1 (0.2×) 7.12 → 5.95; good_man (0.4×) 6.59 → 6.08. Re-centring on every
 frame passes detector jitter to the whole crop, which hurts still clips, so `track` now moves like a lazy camera
-(dead zone) and `auto` keeps the fixed window for clips that move less than half the face size. The face tracker also
+(dead zone) and `auto` keeps the fixed window for clips that move less than half the face size.
+
+Lazy-camera `track` and `auto` on the same four clips (54.8k):
+
+| Clip | Head motion | fixed | track (every frame) | track (lazy camera) | **auto** |
+|---|---|---|---|---|---|
+| demo2 | 0.7 × face | 6.01 | 7.05 | 6.93 | **6.93** (track) |
+| xlf | 0.1 × face | 7.26 | 7.25 | 6.80 | **7.26** (fixed) |
+| demo1 | 0.2 × face | 7.12 | 5.95 | 6.76 | **7.12** (fixed) |
+| good_man (training clip) | 0.4 × face | 6.59 | 6.08 | 6.83 | **6.59** (fixed) |
+
+`auto` is the default: it matches the better crop on every unseen clip. Even a still window of a slightly different
+size and position (the lazy camera did not move on xlf and demo1) changed LSE-C by about 0.4, so small crop
+differences on one clip are close to noise; average over clips (or seeds) before tuning `--crop-deadzone`. The face tracker also
 follows fast motion now: when the box overlap with the previous detection drops below 0.3, it takes the nearest
 face of similar size within one face width instead of losing the track.
 

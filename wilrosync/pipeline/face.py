@@ -237,7 +237,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  cfg: InferenceConfig | None = None, size: int = 512, scale: float = 1.8, mode: str = "lower",
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
-                 landmarker: FaceLandmarker | None = None, crop: str = "fixed", crop_smooth: int = 9,
+                 landmarker: FaceLandmarker | None = None, crop: str = "auto", crop_smooth: int = 9,
                  crop_deadzone: float = 0.15, det_every: int | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 

@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--top", type=float, default=0.3, help="tracked oval: 0 = nose, 1 = upper lip")
     fz.add_argument("--spread", type=float, default=0.0, help="tracked oval: wide outer soft edge (0 = off)")
     fz.add_argument("--spread-up", type=float, default=0.0, help="0 = spread stops at the nose, 1 = under the eyes")
-    fz.add_argument("--crop", default="fixed", choices=["fixed", "track", "auto"],
+    fz.add_argument("--crop", default="auto", choices=["fixed", "track", "auto"],
                     help="fixed: one crop window for the clip; track: the window follows the face (fast head motion); "
                          "auto: track only when the face moves more than half its size")
     fz.add_argument("--crop-smooth", type=int, default=9, help="tracked window: smoothing in frames")
