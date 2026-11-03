@@ -41,6 +41,9 @@ class TrainConfig:
     grad_accum: int = 8
     max_steps: int = 80_000
     warmup_steps: int = 500
+    # cosine decay of both learning rates from step lr_decay_start to lr_min_ratio x lr at max_steps (None = constant)
+    lr_decay_start: int | None = None
+    lr_min_ratio: float = 0.1
     mixed_precision: str = "bf16"  # bf16 | no
     gradient_checkpointing: bool = True
     ema_decay: float = 0.0  # 0 disables EMA

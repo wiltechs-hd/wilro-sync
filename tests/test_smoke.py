@@ -80,3 +80,32 @@ def test_pipeline_single_face(tiny_base, tiny_cfg):
     wav = np.zeros(int(16000 * 9 / 25), dtype=np.float32)
     out = pipe(frames, 25.0, wav, cfg=InferenceConfig(steps=2, window=9, overlap=0, max_side=32), progress=False)
     assert out.shape == frames.shape
+
+
+def test_resume_applies_new_lr_and_decay(tmp_path):
+    import json
+
+    from wilrosync.train.trainer import _lr_lambda
+
+    cfg = load_config("configs/train/smoke_cpu.yaml", [f"output_dir={tmp_path}", "save_every=10"])
+    train(cfg)
+    # resume with a third of the learning rates and a cosine decay from the resume step
+    cfg2 = load_config("configs/train/smoke_cpu.yaml", [
+        f"output_dir={tmp_path}", f"resume_from={tmp_path / 'step_0000010'}", "max_steps=30", "log_every=1",
+        f"lr={cfg.lr / 3}", f"lr_new={cfg.lr_new / 3}", "lr_decay_start=10", "lr_min_ratio=0.1"])
+    train(cfg2)
+    logs = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
+    after = {r["step"]: r["lr"] for r in logs if r["step"] > 10}
+    f = _lr_lambda(cfg2)
+    # the logged lr is the first group's (new layers): lr_new / 3, decayed
+    assert abs(after[11] - cfg.lr_new / 3 * f(11)) / (cfg.lr_new / 3) < 0.05
+    assert after[30] < after[11] and abs(after[30] - cfg.lr_new / 3 * 0.1) / (cfg.lr_new / 3) < 0.05
+
+
+def test_lr_lambda_shape():
+    from wilrosync.train.trainer import _lr_lambda
+
+    cfg = load_config("configs/train/smoke_cpu.yaml", ["warmup_steps=0", "max_steps=100", "lr_decay_start=50",
+                                                       "lr_min_ratio=0.2"])
+    f = _lr_lambda(cfg)
+    assert f(10) == 1.0 and f(50) == 1.0 and abs(f(75) - 0.6) < 1e-6 and abs(f(100) - 0.2) < 1e-6

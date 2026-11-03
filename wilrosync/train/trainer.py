@@ -89,12 +89,34 @@ def _make_optimizer(cfg: TrainConfig, model: WanLipSyncTransformer):
 
 
 def _lr_lambda(cfg: TrainConfig):
+    """Learning-rate factor per optimizer step: linear warmup, then constant, then (optionally) cosine decay from
+    ``lr_decay_start`` down to ``lr_min_ratio`` at ``max_steps``."""
     def f(step: int) -> float:
         if cfg.warmup_steps > 0 and step < cfg.warmup_steps:
             return (step + 1) / cfg.warmup_steps
-        return 1.0
+        start = cfg.lr_decay_start
+        if start is None or step <= start or cfg.max_steps <= start:
+            return 1.0
+        p = min(1.0, (step - start) / (cfg.max_steps - start))
+        return cfg.lr_min_ratio + (1.0 - cfg.lr_min_ratio) * 0.5 * (1.0 + math.cos(math.pi * p))
 
     return f
+
+
+def _apply_config_lrs(cfg: TrainConfig, opt, sched) -> list[float]:
+    """After resuming: the saved optimizer / scheduler state carries the OLD learning rates, so a changed ``lr`` or
+    ``lr_new`` would be ignored. Reset the base rates from the config (param-group order as in _make_optimizer)."""
+    inner_opt = getattr(opt, "optimizer", opt)
+    inner_sched = getattr(sched, "scheduler", sched)
+    # groups are [new layers, pretrained/LoRA]; with one group only the new layers train (adapter mode)
+    bases = [cfg.lr_new, cfg.lr] if len(inner_opt.param_groups) == 2 else [cfg.lr_new]
+    for g, base in zip(inner_opt.param_groups, bases):
+        g["initial_lr"] = base
+    inner_sched.base_lrs = list(bases)
+    factor = inner_sched.lr_lambdas[0](inner_sched.last_epoch)
+    for g, base in zip(inner_opt.param_groups, bases):
+        g["lr"] = base * factor
+    return bases
 
 
 class EMA:
@@ -149,6 +171,10 @@ def train(cfg: TrainConfig) -> dict:
         acc.load_state(os.path.join(cfg.resume_from, "state"))
         with open(os.path.join(cfg.resume_from, "step.json")) as f:
             step = json.load(f)["step"]
+        bases = _apply_config_lrs(cfg, opt, sched)
+        acc.print(f"resumed at step {step}; learning rates {bases} x {_lr_lambda(cfg)(step):.3f}"
+                  + (f", cosine decay from step {cfg.lr_decay_start} to {cfg.lr_min_ratio:g}x at {cfg.max_steps}"
+                     if cfg.lr_decay_start is not None else ""))
     if acc.is_main_process:
         os.makedirs(cfg.output_dir, exist_ok=True)
         with open(os.path.join(cfg.output_dir, "train_config.json"), "w") as f:
