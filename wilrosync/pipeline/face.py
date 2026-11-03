@@ -109,43 +109,72 @@ def smooth_track(values: np.ndarray, k: int) -> np.ndarray:
     return np.convolve(pad, np.ones(k) / k, "valid")
 
 
+def lazy_follow(centre: np.ndarray, deadzone: float, settle: int = 25) -> np.ndarray:
+    """A 'lazy camera' along one axis: it stays still while the face is within ``deadzone`` of it and only moves
+    (just enough) when the face leaves that zone. Small head motion and detector jitter never move the crop."""
+    c = np.asarray(centre, dtype=np.float64)
+    if len(c) == 0 or deadzone <= 0:
+        return c.copy()
+    p = np.empty_like(c)
+    cam = float(np.median(c[:settle]))
+    for i, v in enumerate(c):
+        d = v - cam
+        if abs(d) > deadzone:
+            cam += d - np.sign(d) * deadzone
+        p[i] = cam
+    return p
+
+
 def find_face_window(frames: np.ndarray, bbox=None, scale: float = 1.8, detector=None, det_every: int | None = None,
-                     crop: str = "fixed", smooth: int = 7, y_shift: float = 0.1) -> FaceWindow:
+                     crop: str = "fixed", smooth: int = 9, y_shift: float = 0.1, deadzone: float = 0.15,
+                     auto_motion: float = 0.5) -> FaceWindow:
     """Track the target face (``bbox`` in the first frame, else the largest face) and return the crop window.
 
     crop="fixed": one square for the whole clip, covering all head motion (detection every 5th frame).
-    crop="track": the square follows the face every frame (detection every frame, centre smoothed over ``smooth``
-                  frames), constant size ``scale`` x face, so the face stays large and centred as in training."""
+    crop="track": the square follows the face (detection every frame), constant size ``scale`` x face. It moves like
+                  a lazy camera: still while the face stays within ``deadzone`` x face of it, then just enough to keep
+                  it there, smoothed over ``smooth`` frames. Small motion and detector jitter never shake the crop.
+    crop="auto":  "fixed" when the face moves less than ``auto_motion`` x its size over the clip, else "track"."""
     from ..data.face_crop import square_window
     from ..eval.syncnet import S3FDDetector, track_face
 
-    if crop not in ("fixed", "track"):
-        raise ValueError("crop must be 'fixed' or 'track'")
-    step = det_every or (1 if crop == "track" else 5)
+    if crop not in ("fixed", "track", "auto"):
+        raise ValueError("crop must be 'fixed', 'track' or 'auto'")
     det = detector or _DETECTOR.setdefault("s3fd", S3FDDetector())
-    boxes = track_face(det, frames[::step], init_box=bbox)
-    if boxes is None:
-        raise RuntimeError("no stable face found; pass bbox=(x0, y0, x1, y1)")
+
+    def detect(step):
+        b = track_face(det, frames[::step], init_box=bbox)
+        if b is None:
+            raise RuntimeError("no stable face found; pass bbox=(x0, y0, x1, y1)")
+        sz = np.maximum(b[:, 2] - b[:, 0], b[:, 3] - b[:, 1])
+        bx, by = (b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2
+        return b, sz, bx, by, float(np.median(sz)), max(np.ptp(bx), np.ptp(by))
+
+    step = det_every or (1 if crop == "track" else 5)
+    boxes, size, cx, cy, face, motion = detect(step)
     t, h, w = frames.shape[:3]
-    size = np.maximum(boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1])
-    face = float(np.median(size))
-    cx, cy = (boxes[:, 0] + boxes[:, 2]) / 2, (boxes[:, 1] + boxes[:, 3]) / 2
-    motion = max(np.ptp(cx), np.ptp(cy))
+    if crop == "auto":
+        crop = "track" if motion > auto_motion * face else "fixed"
+        print(f"crop auto: face moves {motion / face:.1f}x its size -> {crop}")
+        if crop == "track" and step != (det_every or 1):
+            step = det_every or 1
+            boxes, size, cx, cy, face, motion = detect(step)
     if crop == "fixed":
         if motion > 0.6 * face:
             print(f"warning: face moves {motion / face:.1f}x its size; try crop='track'")
         x, y, side = square_window(boxes, (w, h), scale, y_shift)
         print(f"face {face:.0f}px -> fixed crop window x={x} y={y} side={side}")
         return FaceWindow([x], [y], side, (w, h))
-    # per-frame centre (interpolated between detections), smoothed; constant size
+    # per-frame centre (interpolated between detections), lazy camera with a dead zone, then smoothed
     ts = np.arange(0, t, step)[: len(boxes)]
-    cx = smooth_track(np.interp(np.arange(t), ts, cx), smooth)
-    cy = smooth_track(np.interp(np.arange(t), ts, cy), smooth)
+    dz = deadzone * face
+    cx = smooth_track(lazy_follow(smooth_track(np.interp(np.arange(t), ts, cx), 5), dz), smooth)
+    cy = smooth_track(lazy_follow(smooth_track(np.interp(np.arange(t), ts, cy), 5), dz), smooth)
     side = int(round(scale * float(np.percentile(size, 90)))) // 2 * 2
     xs = np.round(cx - side / 2).astype(np.int64)
     ys = np.round(cy + y_shift * face - side / 2).astype(np.int64)
     print(f"face {face:.0f}px (moves {motion / face:.1f}x its size) -> tracked crop window side={side}, "
-          f"smoothed over {smooth} frames")
+          f"dead zone {deadzone:g}x face, smoothed over {smooth} frames, moves {max(np.ptp(cx), np.ptp(cy)):.0f}px")
     return FaceWindow(xs, ys, side, (w, h))
 
 
@@ -208,24 +237,25 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  cfg: InferenceConfig | None = None, size: int = 512, scale: float = 1.8, mode: str = "lower",
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
-                 landmarker: FaceLandmarker | None = None, crop: str = "fixed", crop_smooth: int = 7,
-                 det_every: int | None = None) -> str:
+                 landmarker: FaceLandmarker | None = None, crop: str = "fixed", crop_smooth: int = 9,
+                 crop_deadzone: float = 0.15, det_every: int | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
     mode:    "lower" (only the mouth mask is generated) or "full" (the whole crop).
     oval:    "track" (follows the mouth, ``track`` sets its shape) or a dict for a fixed ellipse
              (cx, cy, rx, ry, feather; e.g. ``oval.FIXED_OLD``).
     loop:    reverse | restart | hold | trim, when the audio is longer than the video.
-    crop:    "fixed" (one window for the clip) or "track" (the window follows the face; for fast head motion).
-             ``crop_smooth``: frames of smoothing of the tracked window; ``det_every``: detect every n-th frame
-             (default 5 for fixed, 1 for track).
+    crop:    "fixed" (one window for the clip), "track" (the window follows the face like a lazy camera; for fast
+             head motion) or "auto" (track only when the face moves more than half its size).
+             ``crop_deadzone``: how far (x face) the face may drift before the tracked window moves;
+             ``crop_smooth``: frames of smoothing; ``det_every``: detect every n-th frame (5 fixed, 1 track).
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
     cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows, no overlap)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
     frames, _ = read_video(video, fps=FPS)
     t_src = len(frames)
-    win = find_face_window(frames, bbox, scale, detector, det_every, crop, crop_smooth)
+    win = find_face_window(frames, bbox, scale, detector, det_every, crop, crop_smooth, deadzone=crop_deadzone)
     crops = crop_faces(frames, win, size)
 
     tracked: TrackedOval | None = None
