@@ -244,7 +244,8 @@ def test_tracked_crop_keeps_the_face_centred():
 
     cf, ct = centre_x(crop_faces(frames, fixed, 64)), centre_x(crop_faces(frames, moving, 64))
     assert np.ptp(cf) > 0.4  # the face slides across the fixed crop
-    assert np.ptp(ct[2:-2]) < 0.05 and abs(ct[2:-2].mean() - 0.5) < 0.05  # stays centred in the tracked crop
+    # stays near the centre of the tracked crop (the lazy camera trails by at most the dead zone: 0.15 / 1.8)
+    assert np.ptp(ct[3:-3]) < 0.05 and abs(ct[3:-3].mean() - 0.5) < 0.1
 
 
 def test_tracked_crop_paste_back_round_trip():
@@ -302,3 +303,23 @@ def test_lipsync_face_tracked_crop_end_to_end(tmp_path, tiny_base, tiny_cfg):
                        size=64, detector=_SquareDetector(), landmarker=_FakeLandmarker(), crop="track")
     synced, _ = read_video(out)
     assert synced.shape == (12, 96, 160, 3)
+
+
+def test_lazy_follow_ignores_jitter_and_follows_motion():
+    from wilrosync.pipeline.face import lazy_follow
+
+    rng = np.random.default_rng(0)
+    still = 100 + rng.normal(0, 2, 200)  # detector jitter of ~2 px on a 100 px face, dead zone 15 px
+    assert np.ptp(lazy_follow(still, 15.0)) == 0
+    moving = np.linspace(100, 400, 200)
+    cam = lazy_follow(moving, 15.0)
+    assert np.abs(cam - moving).max() <= 15.0 + 1e-6 and cam[-1] > 380
+
+
+def test_auto_crop_picks_by_motion():
+    from wilrosync.pipeline.face import find_face_window
+
+    fast, _ = _moving_face_frames()  # moves ~4x its size
+    assert find_face_window(fast, None, 1.8, _SquareDetector(), crop="auto").moving
+    still = np.repeat(fast[:1], 24, 0)
+    assert not find_face_window(still, None, 1.8, _SquareDetector(), crop="auto").moving
