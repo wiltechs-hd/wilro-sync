@@ -59,6 +59,7 @@ class MEADConfig:
     root: str = "mead"  # extracted MEAD tree, relative to <work>/raw (manual download)
     views: list[str] = field(default_factory=lambda: ["front"])
     per_folder: int = 4
+    per_view: dict[str, int] = field(default_factory=dict)  # pairs per folder for single views, e.g. {left_30: 4}
 
 
 @dataclass
@@ -265,7 +266,8 @@ def _mead_pairs(plan: dict, paths: StagePaths) -> list[dict]:
     root = os.path.join(paths.raw, m["root"])
     if not os.path.isdir(root):
         return []
-    return sources.mead_pairs(root, tuple(m["views"]), m["per_folder"], plan["stage"]["seed"], relative_to=paths.raw)
+    return sources.mead_pairs(root, tuple(m["views"]), m["per_folder"], plan["stage"]["seed"], relative_to=paths.raw,
+                              per_view=m.get("per_view") or {})
 
 
 def mead_crop_path(paths: StagePaths, rel: str) -> str:

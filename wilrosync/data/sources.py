@@ -155,16 +155,20 @@ def total_hours(segs: list[dict]) -> float:
 
 # ----------------------------------------------------------------------------- MEAD (local)
 def mead_pairs(mead_root: str, views: tuple[str, ...] = ("front",), per_folder: int = 4,
-               seed: int = 0, relative_to: str | None = None) -> list[dict]:
+               seed: int = 0, relative_to: str | None = None, per_view: dict | None = None) -> list[dict]:
     """Pseudo pairs from an extracted MEAD tree (``<actor>/video/<view>/<emotion>/<level>/<nnn>.mp4``):
-    two different sentences with the same actor, view, emotion and level."""
-    rng = random.Random(seed)
+    two different sentences with the same actor, view, emotion and level.
+
+    ``per_view`` overrides ``per_folder`` for single views, e.g. {"left_30": 4, "right_30": 4}. Each view draws
+    from its own random stream, so adding or resizing a view never changes the pairs of another view."""
     rows = []
     for view in views:
+        rng = random.Random(f"{seed}:{view}") if view != "front" else random.Random(seed)
+        k_view = int((per_view or {}).get(view, per_folder))
         for d in sorted(glob.glob(os.path.join(mead_root, "*", "video", view, "*", "*"))):
             clips = sorted(glob.glob(os.path.join(d, "*.mp4")))
             perms = list(itertools.permutations(clips, 2))
-            for a, b in rng.sample(perms, k=min(per_folder, len(perms))):
+            for a, b in rng.sample(perms, k=min(k_view, len(perms))):
                 rel = (lambda p: os.path.relpath(p, relative_to)) if relative_to else (lambda p: p)
                 rows.append({"kind": "pseudo_pair", "cond": rel(a), "target": rel(b),
                              "group": "mead_" + os.path.relpath(d, mead_root).split(os.sep)[0]})
