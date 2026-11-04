@@ -187,3 +187,22 @@ shutil.copy({clip!r}, out)
                        progress=None)
     assert c["ok"] == 2 and c["failed"] == 2
     assert not list(seg_dir.glob("hdtf_*.mp4"))  # cleaned up after cropping
+
+
+def test_mead_side_views_do_not_change_front_pairs(tmp_path):
+    for view in ("front", "left_30", "right_30"):
+        for actor in ("M003", "W009"):
+            d = tmp_path / "mead" / actor / "video" / view / "happy" / "level_1"
+            d.mkdir(parents=True)
+            for i in range(6):
+                (d / f"{i:03d}.mp4").write_bytes(b"x")
+    root = str(tmp_path / "mead")
+    front_only = sources.mead_pairs(root, ("front",), per_folder=16, seed=7)
+    rows = sources.mead_pairs(root, ("front", "left_30", "right_30"), per_folder=16, seed=7,
+                              per_view={"left_30": 4, "right_30": 4})
+    assert [r for r in rows if "/front/" in r["cond"]] == front_only  # front pairs unchanged
+    assert sum("/left_30/" in r["cond"] for r in rows) == 8 and sum("/right_30/" in r["cond"] for r in rows) == 8
+    # resizing one side view leaves the other views' pairs alone
+    more = sources.mead_pairs(root, ("front", "left_30", "right_30"), per_folder=16, seed=7, per_view={"left_30": 6})
+    assert [r for r in more if "/right_30/" in r["cond"]] == \
+        [r for r in sources.mead_pairs(root, ("front", "right_30"), per_folder=16, seed=7) if "/right_30/" in r["cond"]]
