@@ -45,6 +45,7 @@ The weights for face detection and SyncNet download on first use into `$WILROSYN
 | `--size` / `--scale` | 512 / 1.8 | Crop size and crop window relative to the face (training layout; keep). |
 | `--crop` | `auto` | `auto` (default): the fixed window when the head moves less than half the face size over the clip, otherwise `track`. `fixed`: one crop window for the whole clip. `track`: the window follows the face like a lazy camera (still while the face stays within `--crop-deadzone` 0.15 × face of it, then moves just enough; smoothed over `--crop-smooth` 9 frames). |
 | `--oval` | `track` | `track`: follows the mouth. `fixed` / `fixed_old`: a static ellipse. |
+| `--preroll` | 0 | Frames generated before the start and dropped afterwards (the first frames played backwards, with silence), so the first real frames aren't generated cold. Try 8 (0.3 s) when the very first frames of a video look bad. |
 | `--vae-bf16` | off | bf16 VAE: about 2× faster encode/decode, tiny colour/detail change. |
 | `--profile` | off | Print time spent in VAE encode, denoising, VAE decode. |
 
