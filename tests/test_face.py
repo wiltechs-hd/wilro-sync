@@ -323,3 +323,21 @@ def test_auto_crop_picks_by_motion():
     assert find_face_window(fast, None, 1.8, _SquareDetector(), crop="auto").moving
     still = np.repeat(fast[:1], 24, 0)
     assert not find_face_window(still, None, 1.8, _SquareDetector(), crop="auto").moving
+
+
+def test_preroll_generates_extra_frames_and_drops_them(tmp_path):
+    from wilrosync.io.media import read_video
+
+    calls = {}
+
+    class _EchoPipe:  # returns the crops it was given, records what it got
+        def __call__(self, frames, fps, wav, target=None, cfg=None):
+            calls.update(n=len(frames), wav=len(wav), first=frames[0].copy(), mask_n=target.mask.shape[0])
+            return frames
+
+    video, audio = _media(tmp_path)  # 12 video frames, 18 frames of audio
+    out = lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "pre.mp4"), cfg=face_infer_config(steps=1, window=9),
+                       size=64, detector=_FakeDetector(), landmarker=_FakeLandmarker(), preroll=4)
+    assert calls["n"] == 18 + 4 and calls["mask_n"] == 18 + 4  # 4 extra frames generated ...
+    assert calls["wav"] == int(16000 * 18 / 25) + 4 * 640  # ... with 4 frames of silence in front
+    assert read_video(out)[0].shape[0] == 18  # ... and dropped: same length as the audio

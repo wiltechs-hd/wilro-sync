@@ -238,13 +238,15 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
                  landmarker: FaceLandmarker | None = None, crop: str = "auto", crop_smooth: int = 9,
-                 crop_deadzone: float = 0.15, det_every: int | None = None) -> str:
+                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 0) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
     mode:    "lower" (only the mouth mask is generated) or "full" (the whole crop).
     oval:    "track" (follows the mouth, ``track`` sets its shape) or a dict for a fixed ellipse
              (cx, cy, rx, ry, feather; e.g. ``oval.FIXED_OLD``).
     loop:    reverse | restart | hold | trim, when the audio is longer than the video.
+    preroll: extra frames generated before the start and dropped (first frames backwards + silence), so the
+             first real frames are not generated cold; 8 (0.3 s) if the start of some videos looks bad.
     crop:    "fixed" (one window for the clip), "track" (the window follows the face like a lazy camera; for fast
              head motion) or "auto" (track only when the face moves more than half its size).
              ``crop_deadzone``: how far (x face) the face may drift before the tracked window moves;
@@ -289,16 +291,21 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
         raise ValueError("pipe is required unless preview=True")
     wav = read_audio(audio)
     idx = loop_indices(t_src, int(len(wav) / 16000 * FPS), loop, pause)
-    n = len(idx)
     cfg = cfg or face_infer_config()
     cfg.max_side, cfg.loop_video = size, False
+    # pre-roll: generate ``preroll`` extra frames before the start (the first frames played backwards, with
+    # silence), then drop them, so the real first frame has motion and full audio context behind it
+    pre = int(max(0, min(preroll, t_src - 1)))
+    gen_idx = np.concatenate([idx[1:pre + 1][::-1], idx]) if pre else idx
+    gen_wav = np.concatenate([np.zeros(pre * 16000 // int(FPS), dtype=wav.dtype), wav]) if pre else wav
+    m_gen = len(gen_idx)
     target = None
     if mode == "lower":
-        mouth = torch.from_numpy(tracked.mouth[idx]) if tracked is not None \
-            else torch.tensor([0.5, 0.6]).expand(n, 2).clone()  # same layout as the training crops
-        target = TargetSignals(mask=masks_for(idx, MASK_RES).contiguous(), mouth=mouth.float(),
-                               face_width=torch.full((n,), 0.55), presence=torch.ones(n, dtype=torch.bool))
-    res = pipe(crops[idx], FPS, wav, target=target, cfg=cfg)  # uint8 [N, size, size, 3]
+        mouth = torch.from_numpy(tracked.mouth[gen_idx]) if tracked is not None \
+            else torch.tensor([0.5, 0.6]).expand(m_gen, 2).clone()  # same layout as the training crops
+        target = TargetSignals(mask=masks_for(gen_idx, MASK_RES).contiguous(), mouth=mouth.float(),
+                               face_width=torch.full((m_gen,), 0.55), presence=torch.ones(m_gen, dtype=torch.bool))
+    res = pipe(crops[gen_idx], FPS, gen_wav, target=target, cfg=cfg)[pre:]  # uint8 [N, size, size, 3]
 
     feather = max(2, int(0.08 * win.side)) if mode == "full" else 0.0  # the lower masks are already soft
 
