@@ -267,12 +267,12 @@ class LipSyncPipeline:
         """Windows overlapping by ``cfg.chain`` frames; the overlap is generated once (by the earlier window) and
         given to the next window as fixed context: its latent frames are region-locked to the generated frames,
         and the next window's output is used from the first frame after them."""
-        c = cfg.chain
-        if (c - 1) % self.vae.temporal_factor or not 0 < c < cfg.window:
-            raise ValueError(f"chain must be 1 + {self.vae.temporal_factor}k and below the window, got {c}")
+        tf = self.vae.temporal_factor
+        if (cfg.chain - 1) % tf or cfg.chain < 1:
+            raise ValueError(f"chain must be 1 + {tf}k, got {cfg.chain}")
+        c = min(cfg.chain, cfg.window - tf)  # short windows: at least one new latent frame per window
         if cfg.overlap:
             raise ValueError("use either chain or overlap, not both")
-        tf = self.vae.temporal_factor
         windows = plan_windows(n, cfg.window, c, target.presence)
         px: dict[int, torch.Tensor] = {}  # final decoded frames (processing size) not yet written
         prev = None

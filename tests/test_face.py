@@ -365,3 +365,9 @@ def test_blend_single_and_raw_out(tmp_path):
     single, double = (read_video(outs[b])[0].astype(float) for b in ("single", "double"))
     # single blend: the generated (white) mouth weighs mask, double about mask x feathered mask -> brighter
     assert single.mean() > double.mean()
+
+
+def test_face_config_chains_by_default():
+    assert face_infer_config().chain == 9
+    assert face_infer_config(overlap=8).chain == 0  # overlap replaces chaining
+    assert face_infer_config(chain=0).chain == 0
