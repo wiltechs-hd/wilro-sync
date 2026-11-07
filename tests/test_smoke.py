@@ -109,3 +109,42 @@ def test_lr_lambda_shape():
                                                        "lr_min_ratio=0.2"])
     f = _lr_lambda(cfg)
     assert f(10) == 1.0 and f(50) == 1.0 and abs(f(75) - 0.6) < 1e-6 and abs(f(100) - 0.2) < 1e-6
+
+
+def test_pipeline_chained_windows(tiny_base, tiny_cfg):
+    model = WanLipSyncTransformer(tiny_base, tiny_cfg).eval()
+    pipe = LipSyncPipeline(model, _tiny_vae(), _Text(), _Audio(), device="cpu", dtype=torch.float32)
+    rng = np.random.default_rng(2)
+    t, h, w = 30, 32, 32
+    frames = rng.integers(0, 255, size=(t, h, w, 3), dtype=np.uint8)
+    wav = rng.standard_normal(int(16000 * t / 25)).astype(np.float32) * 0.1
+    target = TargetSignals.from_bbox(t, h, w, (4, 4, 28, 28))
+    runs, locks = [], []
+    run, denoise = pipe._run_window, pipe._denoise_window
+
+    def spy_run(*a, **k):
+        out = run(*a, **k)
+        runs.append((a[1], k.get("ctx_px"), k.get("n_lock", 0), out))
+        return out
+
+    def spy_denoise(z_src, *a, **k):
+        x = denoise(z_src, *a, **k)
+        locks.append((z_src, x))
+        return x
+
+    pipe._run_window, pipe._denoise_window = spy_run, spy_denoise
+    cfg = InferenceConfig(steps=3, window=13, overlap=0, chain=5, max_side=32, loop_video=False)
+    out = pipe(frames, 25.0, wav, target=target, cfg=cfg, progress=False)
+    assert out.shape == (t, h, w, 3)
+    assert runs[0][1] is None and all(r[2] >= 2 for r in runs[1:])  # >= 5 context frames = 2 latent frames
+    for (w0, _, _, d0), (w1, ctx, _, _) in zip(runs, runs[1:]):
+        if w1.start == w0.start + 8:  # regular stride: the context is the previous window's last 5 frames
+            assert torch.allclose(ctx, d0[w1.start - w0.start: w1.start - w0.start + 5])
+    for (z_src, x), (_, _, n_lock, _) in zip(locks, runs):
+        assert torch.allclose(x[:, :, :n_lock], z_src[:, :, :n_lock], atol=1e-5)  # context held fixed
+    try:
+        pipe(frames, 25.0, wav, target=target, cfg=InferenceConfig(steps=1, window=9, overlap=2, chain=5,
+                                                                    max_side=32), progress=False)
+        raise AssertionError("chain + overlap must be rejected")
+    except ValueError:
+        pass

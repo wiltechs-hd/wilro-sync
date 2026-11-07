@@ -62,7 +62,8 @@ def cmd_infer_face(a: argparse.Namespace) -> None:
         pipe = LipSyncPipeline.from_pretrained(
             a.ckpt, device=a.device, dtype=dtype, text_device=a.text_device,
             vae_dtype=torch.bfloat16 if a.vae_bf16 else torch.float32)
-    overrides = {k: getattr(a, k) for k in ("steps", "tau", "seed", "window", "overlap") if getattr(a, k) is not None}
+    overrides = {k: getattr(a, k) for k in ("steps", "tau", "seed", "window", "overlap", "chain")
+                 if getattr(a, k) is not None}
     if a.omega_peak is not None:
         overrides["dscfg"] = {"omega_peak": a.omega_peak}
     cfg = face_infer_config(**overrides, profile=a.profile)
@@ -172,6 +173,9 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--omega-peak", type=float, default=None, help="default 4.5")
     fz.add_argument("--window", type=int, default=None, help="default 81")
     fz.add_argument("--overlap", type=int, default=None, help="default 0")
+    fz.add_argument("--chain", type=int, default=None,
+                    help="window chaining: each window continues the last N generated frames (1 + 4k, e.g. 9); "
+                         "fixes a change in look at window cuts. Default 0 (off)")
     fz.add_argument("--seed", type=int, default=None)
     fz.add_argument("--preview", action="store_true", help="only write the crop with the mask drawn (no model)")
     fz.add_argument("--vae-bf16", action="store_true", help="bf16 VAE: faster, tiny colour/detail change")

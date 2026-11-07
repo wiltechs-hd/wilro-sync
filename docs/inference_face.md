@@ -41,6 +41,7 @@ The weights for face detection and SyncNet download on first use into `$WILROSYN
 | `--tau` | 0.92 | Noise level at the start (progressive noise init). |
 | `--omega-peak` | 4.5 | Audio guidance strength on the mouth. |
 | `--window` / `--overlap` | 81 / 0 | Frames per generation window (1 + 4k) / frames blended between windows. 81 synced much better than the 49-frame training length (7.24 vs 4.84 LSE-C on xlf, 54.8k); all results below use 81. |
+| `--chain` | 0 | Window chaining. Each window after the first starts from the last N frames already generated (1 + 4k, e.g. 9), held fixed, so it continues them instead of starting cold; nothing is cross-faded. Fixes a sudden change in sharpness or look at window cuts (every 81 frames, shifted by `--preroll`). About 10% slower at 9. Use instead of `--overlap`. |
 | `--loop` | `reverse` | Audio longer than the video: `reverse` (ping-pong), `restart`, `hold`, `trim`. |
 | `--size` / `--scale` | 512 / 1.8 | Crop size and crop window relative to the face (training layout; keep). |
 | `--crop` | `auto` | `auto` (default): the fixed window when the head moves less than half the face size over the clip, otherwise `track`. `fixed`: one crop window for the whole clip. `track`: the window follows the face like a lazy camera (still while the face stays within `--crop-deadzone` 0.15 × face of it, then moves just enough; smoothed over `--crop-smooth` 9 frames). |

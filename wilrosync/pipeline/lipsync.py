@@ -37,6 +37,10 @@ class InferenceConfig:
     dscfg: DSCFGConfig = field(default_factory=DSCFGConfig)
     window: int = 81
     overlap: int = 12
+    # window chaining: each window after the first starts with the last ``chain`` frames already generated,
+    # held fixed (region-locked) as context, so it continues them instead of starting cold. 1 + 4k (e.g. 9);
+    # 0 = off. Replaces ``overlap`` (no cross-fade, so no doubled mouth at the cut).
+    chain: int = 0
     max_side: int = 832
     size_multiple: int = 16
     region_lock: bool = True
@@ -160,7 +164,7 @@ class LipSyncPipeline:
 
     # ------------------------------------------------------------------ helpers
     def _denoise_window(self, z_src, text, audio_tokens, null_tokens, mask_lat, mouth_lat, fw_lat,
-                        full_frame: bool, cfg: InferenceConfig, generator) -> torch.Tensor:
+                        full_frame: bool, cfg: InferenceConfig, generator, force_lock: bool = False) -> torch.Tensor:
         dev, dt = self.device, self.dtype
         noise = torch.randn(z_src.shape, generator=generator, dtype=torch.float32).to(dev, dt)
         sigmas = inference_sigmas(cfg.steps, cfg.tau, cfg.shift).tolist()
@@ -169,7 +173,7 @@ class LipSyncPipeline:
         g_map = spatial_map(mouth_lat.to(dev), fw_lat.to(dev), latent_hw, cfg.dscfg)
         tmask = None if full_frame else mask_lat.to(dev)
         lock = None
-        if cfg.region_lock and not full_frame:
+        if (cfg.region_lock and not full_frame) or force_lock:  # force: chained context, also in full-frame mode
             lock = RegionLock(z_src, noise, mask_lat.to(dev), cfg.release_steps, cfg.release_dilate)
         text2 = torch.cat([text, text])
         zc2 = torch.cat([z_src, z_src])
@@ -235,11 +239,16 @@ class LipSyncPipeline:
         win_feats = frame_audio_windows(feats, n, fps, window=self.transformer.cfg.audio_window)
         text = self.encode_prompt(cfg.prompt)
 
+        out = frames.copy()
+        gen = torch.Generator().manual_seed(cfg.seed)
+        if cfg.chain:
+            self._run_chained(out, frames, target, win_feats, text, (ph, pw), cfg, gen, n, progress)
+            if cfg.profile:
+                self.timings["total"] = time.time() - t_start
+            return out
         windows = plan_windows(n, cfg.window, cfg.overlap, target.presence)
         weights = blend_weights(windows, n, cfg.overlap)
-        out = frames.copy()
         acc: dict[int, torch.Tensor] = {}
-        gen = torch.Generator().manual_seed(cfg.seed)
 
         for k, (win, wts) in enumerate(tqdm(list(zip(windows, weights)), disable=not progress, desc="windows")):
             decoded = self._run_window(frames, win, target, win_feats, text, (ph, pw), cfg, gen)
@@ -254,11 +263,44 @@ class LipSyncPipeline:
             self.timings["total"] = time.time() - t_start
         return out
 
-    def _run_window(self, frames, win: Window, target: TargetSignals, win_feats, text, proc_hw, cfg, gen):
+    def _run_chained(self, out, frames, target: TargetSignals, win_feats, text, proc_hw, cfg, gen, n, progress):
+        """Windows overlapping by ``cfg.chain`` frames; the overlap is generated once (by the earlier window) and
+        given to the next window as fixed context: its latent frames are region-locked to the generated frames,
+        and the next window's output is used from the first frame after them."""
+        c = cfg.chain
+        if (c - 1) % self.vae.temporal_factor or not 0 < c < cfg.window:
+            raise ValueError(f"chain must be 1 + {self.vae.temporal_factor}k and below the window, got {c}")
+        if cfg.overlap:
+            raise ValueError("use either chain or overlap, not both")
+        tf = self.vae.temporal_factor
+        windows = plan_windows(n, cfg.window, c, target.presence)
+        px: dict[int, torch.Tensor] = {}  # final decoded frames (processing size) not yet written
+        prev = None
+        for k, win in enumerate(tqdm(windows, disable=not progress, desc="windows")):
+            ctx = prev.end - win.start if prev is not None and prev.end > win.start else 0
+            n_lock = 1 + (ctx - 1) // tf if ctx else 0  # latent frames fully covered by the context
+            n_ctx = 1 + tf * (n_lock - 1) if n_lock else 0  # their frames
+            ctx_px = torch.stack([px[f] for f in range(win.start, win.start + n_ctx)]) if n_ctx else None
+            decoded = self._run_window(frames, win, target, win_feats, text, proc_hw, cfg, gen,
+                                       ctx_px=ctx_px, n_lock=n_lock)
+            for j in range(n_ctx, win.real_len):
+                px[win.start + j] = decoded[j]
+            next_start = windows[k + 1].start if k + 1 < len(windows) else n
+            ready = sorted(f for f in px if f < next_start)
+            if ready:
+                self._flush(out, frames, target, {f: px.pop(f) for f in ready}, ready, cfg)
+            prev = win
+
+    def _run_window(self, frames, win: Window, target: TargetSignals, win_feats, text, proc_hw, cfg, gen,
+                    ctx_px: torch.Tensor | None = None, n_lock: int = 0):
+        """``ctx_px`` [c, 3, H', W'] (-1..1): already generated frames that replace the first c source frames;
+        the first ``n_lock`` latent frames (which cover them) are then held fixed."""
         ph, pw = proc_hw
         pad_idx = np.concatenate([np.arange(win.start, win.end), np.full(win.length - win.real_len, win.end - 1)])
         src = _to_tensor(frames[pad_idx])
         src = F.interpolate(src, size=(ph, pw), mode="bilinear", align_corners=False, antialias=True)
+        if ctx_px is not None:
+            src[: len(ctx_px)] = ctx_px.to(src.dtype)
         src = src.permute(1, 0, 2, 3).unsqueeze(0).to(self.device)  # [1, 3, L, H', W']
         with self._timed("vae encode"):
             z_src = self.vae.encode(src).to(self.dtype)
@@ -267,12 +309,15 @@ class LipSyncPipeline:
         tsig_p = TargetSignals(tsig.resized_mask(ph, pw), tsig.mouth, tsig.face_width, tsig.presence,
                                tsig.full_frame)
         mask_lat, mouth_lat, fw_lat = tsig_p.to_latent(tuple(z_src.shape[-2:]), tf)
+        if n_lock:
+            mask_lat = mask_lat.clone()
+            mask_lat[:n_lock] = 0  # context: locked to the frames generated by the previous window
         a = win_feats[torch.as_tensor(pad_idx)].unsqueeze(0).to(self.device)
         tokens = self.transformer.encode_audio(a)
         null = self.transformer.null_audio(1, tokens.shape[1]).to(tokens.dtype)
         with self._timed("denoise"):
             x = self._denoise_window(z_src, text, tokens, null, mask_lat, mouth_lat, fw_lat, tsig.full_frame,
-                                     cfg, gen)
+                                     cfg, gen, force_lock=n_lock > 0)
         with self._timed("vae decode"):
             video = self.vae.decode(x)[0].permute(1, 0, 2, 3)  # [L, 3, H', W']
         return video[: win.real_len].float().cpu()
