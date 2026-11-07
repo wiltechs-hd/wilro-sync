@@ -195,6 +195,21 @@ def crop_faces(frames: np.ndarray, win: FaceWindow, size: int, pad_value: float 
     return out
 
 
+def _blend_in_crop(gen: np.ndarray, crops: np.ndarray, masks, cfg: InferenceConfig, chunk: int = 32) -> np.ndarray:
+    """The crop-level blend of ``blend="double"`` (what the pipeline used to do before the paste):
+    gen x feathered mask + crop x the rest, with colour matching."""
+    out = np.empty_like(gen)
+    size = gen.shape[1]
+    for s in range(0, len(gen), chunk):
+        e = min(s + chunk, len(gen))
+        m = F.interpolate(masks(s, e)[:, None].float(), size=(size, size), mode="bilinear")[:, 0]
+        g = torch.from_numpy(gen[s:e]).permute(0, 3, 1, 2).float() / 127.5 - 1
+        c = torch.from_numpy(crops[s:e]).permute(0, 3, 1, 2).float() / 127.5 - 1
+        r = composite(g, c, m, cfg.feather_px, cfg.color_match)
+        out[s:e] = ((r + 1) * 127.5).round().clamp(0, 255).byte().permute(0, 2, 3, 1).numpy()
+    return out
+
+
 def paste_faces(frames: np.ndarray, gen: np.ndarray, win: FaceWindow, masks, feather: float = 0.0,
                 color_match: bool = True, chunk: int = 16, src_idx=None) -> np.ndarray:
     """Blend generated crops ``gen`` [N, S, S, 3] into ``frames`` [N, H, W, 3] (in place, also returned).
@@ -238,7 +253,8 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
                  landmarker: FaceLandmarker | None = None, crop: str = "auto", crop_smooth: int = 9,
-                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 0) -> str:
+                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 0,
+                 blend: str = "double", raw_out: str | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
     mode:    "lower" (only the mouth mask is generated) or "full" (the whole crop).
@@ -251,10 +267,17 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
              head motion) or "auto" (track only when the face moves more than half its size).
              ``crop_deadzone``: how far (x face) the face may drift before the tracked window moves;
              ``crop_smooth``: frames of smoothing; ``det_every``: detect every n-th frame (5 fixed, 1 track).
+    blend:   how the generated mouth is blended into the video (``lower`` mode). "double" (the evaluated default):
+             blended once in the crop (mask + 6 px feather) and again when pasted, so the effective weight is about
+             mask squared and the source mouth shows through more at the edge. "single": blended once, with the
+             mask as drawn by ``preview``.
+    raw_out: also write the face crops as generated, before any blending: source crop | generated (debugging).
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
     cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows, no overlap)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
+    if blend not in ("double", "single"):
+        raise ValueError("blend must be 'double' or 'single'")
     frames, _ = read_video(video, fps=FPS)
     t_src = len(frames)
     win = find_face_window(frames, bbox, scale, detector, det_every, crop, crop_smooth, deadzone=crop_deadzone)
@@ -305,7 +328,13 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
             else torch.tensor([0.5, 0.6]).expand(m_gen, 2).clone()  # same layout as the training crops
         target = TargetSignals(mask=masks_for(gen_idx, MASK_RES).contiguous(), mouth=mouth.float(),
                                face_width=torch.full((m_gen,), 0.55), presence=torch.ones(m_gen, dtype=torch.bool))
+    cfg.composite = mode == "full"  # lower mode: the pipeline returns the raw crops, blended below
     res = pipe(crops[gen_idx], FPS, gen_wav, target=target, cfg=cfg)[pre:]  # uint8 [N, size, size, 3]
+    if raw_out:
+        write_video(raw_out, np.concatenate([crops[idx[:len(res)]], res], axis=2), FPS, audio_path=audio)
+        print(f"raw crops (source | generated) -> {raw_out}")
+    if mode == "lower" and blend == "double":
+        res = _blend_in_crop(res, crops[idx[:len(res)]], lambda s, e: masks_for(idx[s:e], MASK_RES), cfg)
 
     feather = max(2, int(0.08 * win.side)) if mode == "full" else 0.0  # the lower masks are already soft
 

@@ -341,3 +341,27 @@ def test_preroll_generates_extra_frames_and_drops_them(tmp_path):
     assert calls["n"] == 18 + 4 and calls["mask_n"] == 18 + 4  # 4 extra frames generated ...
     assert calls["wav"] == int(16000 * 18 / 25) + 4 * 640  # ... with 4 frames of silence in front
     assert read_video(out)[0].shape[0] == 18  # ... and dropped: same length as the audio
+
+
+def test_blend_single_and_raw_out(tmp_path):
+    from wilrosync.io.media import read_video
+
+    seen = []
+
+    class _BrightPipe:  # returns white crops, records whether the pipeline was asked to blend
+        def __call__(self, frames, fps, wav, target=None, cfg=None):
+            seen.append(cfg.composite)
+            return np.full_like(frames, 255)
+
+    video, audio = _media(tmp_path)
+    kw = dict(size=64, detector=_FakeDetector(), landmarker=_FakeLandmarker())
+    outs = {}
+    for b in ("double", "single"):
+        outs[b] = lipsync_face(_BrightPipe(), video, audio, str(tmp_path / f"{b}.mp4"), blend=b,
+                               cfg=face_infer_config(steps=1, window=9), raw_out=str(tmp_path / f"raw_{b}.mp4"), **kw)
+    assert seen == [False, False]  # lower mode: the pipeline returns raw crops
+    raw = read_video(str(tmp_path / "raw_single.mp4"))[0]
+    assert raw.shape[2] == 2 * raw.shape[1]  # source | generated side by side
+    single, double = (read_video(outs[b])[0].astype(float) for b in ("single", "double"))
+    # single blend: the generated (white) mouth weighs mask, double about mask x feathered mask -> brighter
+    assert single.mean() > double.mean()
