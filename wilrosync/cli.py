@@ -69,7 +69,7 @@ def cmd_infer_face(a: argparse.Namespace) -> None:
     lipsync_face(pipe, a.video, a.audio, a.out, bbox=a.bbox, cfg=cfg, size=a.size, scale=a.scale, mode=a.mode,
                  loop=a.loop, oval=oval, track=track, preview=a.preview, crop=a.crop, crop_smooth=a.crop_smooth,
                  crop_deadzone=a.crop_deadzone, det_every=a.det_every,
-                 preroll=a.preroll)
+                 preroll=a.preroll, blend=a.blend, raw_out=a.raw_out)
     if pipe is not None and a.profile:
         print("timings (s):", {k: round(v, 1) for k, v in pipe.timings.items()})
 
@@ -161,6 +161,10 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--det-every", type=int, default=None, help="face detection every n-th frame (5 fixed / 1 track)")
     fz.add_argument("--preroll", type=int, default=0,
                     help="frames generated before the start and dropped (e.g. 8) if the first frames look bad")
+    fz.add_argument("--blend", default="double", choices=["double", "single"],
+                    help="double: blended in the crop and again when pasted (evaluated default); single: once, "
+                         "with the mask as previewed (less of the source mouth at the edge)")
+    fz.add_argument("--raw-out", default=None, help="also write the crops as generated: source | generated")
     fz.add_argument("--size", type=int, default=512, help="face crop size (training: 512)")
     fz.add_argument("--scale", type=float, default=1.8, help="crop window / face size (training: 1.8)")
     fz.add_argument("--steps", type=int, default=None, help="default 10")

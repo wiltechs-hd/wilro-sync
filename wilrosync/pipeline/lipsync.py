@@ -44,6 +44,7 @@ class InferenceConfig:
     release_dilate: int = 1
     feather_px: float = 6.0
     color_match: bool = True
+    composite: bool = True  # False: return the decoded crops as generated (the caller blends them, e.g. face crops)
     prompt: str = DEFAULT_PROMPT
     seed: int = 0
     loop_video: bool = True  # ping-pong the video when the audio is longer
@@ -284,5 +285,8 @@ class LipSyncPipeline:
         mask = target.mask[ready].float()
         if mask.shape[-2:] != (h, w):
             mask = F.interpolate(mask[:, None], size=(h, w), mode="bilinear")[:, 0]
+        if not cfg.composite:
+            out[ready] = _to_uint8(gen)
+            return
         res = composite(gen, src, mask, cfg.feather_px, cfg.color_match and not target.full_frame)
         out[ready] = _to_uint8(res)
