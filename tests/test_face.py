@@ -368,6 +368,6 @@ def test_blend_single_and_raw_out(tmp_path):
 
 
 def test_face_config_chains_by_default():
-    assert face_infer_config().chain == 9
+    assert face_infer_config().chain == 5
     assert face_infer_config(overlap=8).chain == 0  # overlap replaces chaining
     assert face_infer_config(chain=0).chain == 0

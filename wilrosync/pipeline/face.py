@@ -38,8 +38,8 @@ LOOPS = ("reverse", "restart", "hold", "trim")
 def face_infer_config(**overrides) -> InferenceConfig:
     """Inference settings tuned for face-crop mode (LSE-C sweeps, see docs/inference_face.md)."""
     # window 81 (not the 49-frame training length): 7.24 vs 4.84 LSE-C on an unseen clip, same checkpoint and settings
-    # chain 9: each window continues the last 9 generated frames (no jump in look at window cuts)
-    cfg = InferenceConfig(steps=10, tau=0.92, window=81, overlap=0, chain=9, max_side=512, loop_video=False)
+    # chain 5: each window continues the last 5 generated frames (no jump in look at window cuts)
+    cfg = InferenceConfig(steps=10, tau=0.92, window=81, overlap=0, chain=5, max_side=512, loop_video=False)
     if overrides.get("overlap") and "chain" not in overrides:
         overrides = {**overrides, "chain": 0}  # overlap asked for: cross-fade instead of chaining
     for k, v in overrides.items():
@@ -276,7 +276,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
              mask as drawn by ``preview``.
     raw_out: also write the face crops as generated, before any blending: source crop | generated (debugging).
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
-    cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows chained by 9 frames)."""
+    cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows chained by 5 frames)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
     if blend not in ("double", "single"):
