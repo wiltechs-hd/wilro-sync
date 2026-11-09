@@ -255,7 +255,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
                  landmarker: FaceLandmarker | None = None, crop: str = "auto", crop_smooth: int = 9,
-                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 0, postroll: int = 0,
+                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 8, postroll: int = 12,
                  blend: str = "double", raw_out: str | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
@@ -264,9 +264,9 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
              (cx, cy, rx, ry, feather; e.g. ``oval.FIXED_OLD``).
     loop:    reverse | restart | hold | trim, when the audio is longer than the video.
     preroll: extra frames generated before the start and dropped (first frames backwards + silence), so the
-             first real frames are not generated cold; 8 (0.3 s) if the start of some videos looks bad.
+             first real frames are not generated cold. Default 8 (0.3 s); 0 = off.
     postroll: the same at the end (last frames backwards + silence, generated and dropped), so the last real frames
-             have audio after them; 12 (0.5 s) if the end of some videos syncs badly.
+             have audio after them. Default 12 (0.5 s); 0 = off.
     crop:    "fixed" (one window for the clip), "track" (the window follows the face like a lazy camera; for fast
              head motion) or "auto" (track only when the face moves more than half its size).
              ``crop_deadzone``: how far (x face) the face may drift before the tracked window moves;

@@ -160,10 +160,10 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--crop-deadzone", type=float, default=0.15,
                     help="tracked window: face drift (x face size) allowed before the window moves")
     fz.add_argument("--det-every", type=int, default=None, help="face detection every n-th frame (5 fixed / 1 track)")
-    fz.add_argument("--preroll", type=int, default=0,
+    fz.add_argument("--preroll", type=int, default=8,
                     help="frames generated before the start and dropped (e.g. 8) if the first frames look bad")
-    fz.add_argument("--postroll", type=int, default=0,
-                    help="frames generated after the end and dropped (e.g. 12) if the last frames sync badly")
+    fz.add_argument("--postroll", type=int, default=12,
+                    help="frames generated after the end and dropped (fixes bad last frames); 0 = off")
     fz.add_argument("--blend", default="double", choices=["double", "single"],
                     help="double: blended in the crop and again when pasted (evaluated default); single: once, "
                          "with the mask as previewed (less of the source mouth at the edge)")

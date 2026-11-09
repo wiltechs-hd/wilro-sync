@@ -337,7 +337,7 @@ def test_preroll_generates_extra_frames_and_drops_them(tmp_path):
 
     video, audio = _media(tmp_path)  # 12 video frames, 18 frames of audio
     out = lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "pre.mp4"), cfg=face_infer_config(steps=1, window=9),
-                       size=64, detector=_FakeDetector(), landmarker=_FakeLandmarker(), preroll=4)
+                       size=64, detector=_FakeDetector(), landmarker=_FakeLandmarker(), preroll=4, postroll=0)
     assert calls["n"] == 18 + 4 and calls["mask_n"] == 18 + 4  # 4 extra frames generated ...
     assert calls["wav"] == int(16000 * 18 / 25) + 4 * 640  # ... with 4 frames of silence in front
     assert read_video(out)[0].shape[0] == 18  # ... and dropped: same length as the audio
