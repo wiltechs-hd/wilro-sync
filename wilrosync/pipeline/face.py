@@ -37,9 +37,10 @@ LOOPS = ("reverse", "restart", "hold", "trim")
 
 def face_infer_config(**overrides) -> InferenceConfig:
     """Inference settings tuned for face-crop mode (LSE-C sweeps, see docs/inference_face.md)."""
-    # window 81 (not the 49-frame training length): 7.24 vs 4.84 LSE-C on an unseen clip, same checkpoint and settings
+    # windows longer than the 49-frame training length sync better: 81 vs 49 7.24 vs 4.84 on xlf at 54.8k
     # chain 0: chaining (5 or 9) lowered LSE-C by 0.26 on the 5-clip test at 55.5k; kept as an option
-    cfg = InferenceConfig(steps=10, tau=0.92, window=81, overlap=0, chain=0, max_side=512, loop_video=False)
+    # window 129: 7.59 vs 7.48 (81) unseen LSE-C average at 55.5k, 10 GB on an L4; fewer window cuts
+    cfg = InferenceConfig(steps=10, tau=0.92, window=129, overlap=0, chain=0, max_side=512, loop_video=False)
     for k, v in overrides.items():
         if k == "dscfg":
             for dk, dv in v.items():
@@ -274,7 +275,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
              mask as drawn by ``preview``.
     raw_out: also write the face crops as generated, before any blending: source crop | generated (debugging).
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
-    cfg:     inference settings; default ``face_infer_config()`` (10 steps, 81-frame windows, hard cuts)."""
+    cfg:     inference settings; default ``face_infer_config()`` (10 steps, 129-frame windows, hard cuts)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
     if blend not in ("double", "single"):

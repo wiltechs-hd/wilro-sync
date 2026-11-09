@@ -81,3 +81,14 @@ def test_overlap_zero_is_a_hard_cut():
     w0, w1 = blend_weights(wins, n, 0)
     assert torch.all(w0 == 1)  # the first window keeps all its frames
     assert torch.all(w1[:32] == 0) and torch.all(w1[32:] == 1)  # the second is used only after it
+
+
+def test_fade_covers_exactly_overlap_frames():
+    n = 130  # windows [0, 81) and [49, 130): 32 shared frames, fade over the last 8 of them
+    wins = plan_windows(n, window=81, overlap=8)
+    assert [(w.start, w.end) for w in wins] == [(0, 81), (49, 130)]
+    w0, w1 = blend_weights(wins, n, 8)
+    assert torch.all(w1[:24] == 0) and torch.all(w0[:73] == 1)  # shared, before the fade: earlier window only
+    assert torch.all(w1[24:32] > 0) and torch.all(w1[24:32] < 1) and torch.all(torch.diff(w1[24:32]) > 0)
+    torch.testing.assert_close(w0[73:] + w1[24:32], torch.ones(8))  # the fade sums to 1
+    assert torch.all(w1[32:] == 1)

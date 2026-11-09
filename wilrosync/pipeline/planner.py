@@ -78,26 +78,25 @@ def plan_windows(
 def blend_weights(windows: list[Window], num_frames: int, overlap: int) -> list[torch.Tensor]:
     """Per-window weights over its real frames; weights of overlapping windows sum to 1.
 
-    ``overlap=0`` means a hard cut: when windows still overlap (the last window of a segment is shifted back to
-    end on the last frame), each frame comes from the earliest window that covers it, never a 50/50 average of
-    two different generations (which shows as a doubled mouth)."""
-    raw = []
-    for w in windows:
-        wt = torch.ones(w.real_len)
-        if overlap == 0:
-            covered = max((o.end for o in windows if o.start < w.start < o.end), default=w.start)
-            wt[: max(0, min(covered, w.end) - w.start)] = 0.0
-        if overlap > 0:
-            ramp = torch.linspace(0, 1, overlap + 2)[1:-1]
-            has_prev = any(o is not w and o.start < w.start < o.end for o in windows)
-            has_next = any(o is not w and o.start < w.end <= o.end and o.start > w.start for o in windows)
-            if has_prev:
-                k = min(overlap, w.real_len)
-                wt[:k] = torch.minimum(wt[:k], ramp[:k])
-            if has_next:
-                k = min(overlap, w.real_len)
-                wt[-k:] = torch.minimum(wt[-k:], ramp.flip(0)[-k:])
-        raw.append(wt)
+    Where a window starts inside the previous one, the two cross-fade over exactly ``overlap`` frames: the last
+    ``overlap`` frames they share (linear ramp). Shared frames before the fade come from the earlier window only.
+    This matters for the last window of a segment, which is shifted back to end on the last frame and can share
+    far more than ``overlap`` frames; those frames are never averaged 50/50 (two different generated mouths at
+    half strength look like a doubled mouth). ``overlap=0`` is a hard cut."""
+    raw = [torch.ones(w.real_len) for w in windows]
+    order = sorted(range(len(windows)), key=lambda i: (windows[i].start, windows[i].end))
+    for ia, ib in zip(order, order[1:]):
+        a, b = windows[ia], windows[ib]
+        if b.start >= a.end:  # no shared frames (next segment, or windows that just touch)
+            continue
+        shared_end = min(a.end, b.end)
+        k = min(overlap, shared_end - b.start)
+        fade_start = shared_end - k
+        raw[ib][: fade_start - b.start] = 0.0  # shared, before the fade: the earlier window only
+        if k > 0:
+            ramp = torch.linspace(0, 1, k + 2)[1:-1]
+            raw[ib][fade_start - b.start: shared_end - b.start] *= ramp
+            raw[ia][fade_start - a.start: shared_end - a.start] *= 1 - ramp
     total = torch.zeros(num_frames)
     for w, wt in zip(windows, raw):
         total[w.start : w.end] += wt

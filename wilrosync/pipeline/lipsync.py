@@ -41,6 +41,9 @@ class InferenceConfig:
     # held fixed (region-locked) as context, so it continues them instead of starting cold. 1 + 4k (e.g. 9);
     # 0 = off. Replaces ``overlap`` (no cross-fade, so no doubled mouth at the cut).
     chain: int = 0
+    # every window starts from the same noise (seeded by ``seed``) instead of fresh noise per window; tends to keep
+    # fine detail (teeth, lip texture) more alike from window to window
+    same_noise: bool = False
     max_side: int = 832
     size_multiple: int = 16
     region_lock: bool = True
@@ -166,6 +169,8 @@ class LipSyncPipeline:
     def _denoise_window(self, z_src, text, audio_tokens, null_tokens, mask_lat, mouth_lat, fw_lat,
                         full_frame: bool, cfg: InferenceConfig, generator, force_lock: bool = False) -> torch.Tensor:
         dev, dt = self.device, self.dtype
+        if cfg.same_noise:
+            generator = torch.Generator().manual_seed(cfg.seed)
         noise = torch.randn(z_src.shape, generator=generator, dtype=torch.float32).to(dev, dt)
         sigmas = inference_sigmas(cfg.steps, cfg.tau, cfg.shift).tolist()
         x = add_noise(z_src, noise, sigmas[0])

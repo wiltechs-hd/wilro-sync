@@ -66,7 +66,7 @@ def cmd_infer_face(a: argparse.Namespace) -> None:
                  if getattr(a, k) is not None}
     if a.omega_peak is not None:
         overrides["dscfg"] = {"omega_peak": a.omega_peak}
-    cfg = face_infer_config(**overrides, profile=a.profile)
+    cfg = face_infer_config(**overrides, profile=a.profile, same_noise=a.same_noise)
     lipsync_face(pipe, a.video, a.audio, a.out, bbox=a.bbox, cfg=cfg, size=a.size, scale=a.scale, mode=a.mode,
                  loop=a.loop, oval=oval, track=track, preview=a.preview, crop=a.crop, crop_smooth=a.crop_smooth,
                  crop_deadzone=a.crop_deadzone, det_every=a.det_every,
@@ -171,8 +171,10 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--steps", type=int, default=None, help="default 10")
     fz.add_argument("--tau", type=float, default=None, help="default 0.92")
     fz.add_argument("--omega-peak", type=float, default=None, help="default 4.5")
-    fz.add_argument("--window", type=int, default=None, help="default 81")
+    fz.add_argument("--window", type=int, default=None, help="default 129")
     fz.add_argument("--overlap", type=int, default=None, help="default 0")
+    fz.add_argument("--same-noise", action="store_true",
+                    help="start every window from the same noise (more alike from window to window)")
     fz.add_argument("--chain", type=int, default=None,
                     help="window chaining: each window continues the last N generated frames (1 + 4k, e.g. 9); "
                          "fixes a change in look at window cuts. Default 0 (off)")

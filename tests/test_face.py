@@ -208,7 +208,7 @@ def test_lipsync_face_end_to_end(tmp_path, tiny_base, tiny_cfg):
 
 def test_face_defaults_match_the_tuned_settings():
     cfg = face_infer_config()
-    assert (cfg.steps, cfg.window, cfg.overlap, cfg.tau, cfg.max_side) == (10, 81, 0, 0.92, 512)
+    assert (cfg.steps, cfg.window, cfg.overlap, cfg.tau, cfg.max_side) == (10, 129, 0, 0.92, 512)
     assert face_infer_config(window=49, dscfg={"omega_peak": 3.5}).dscfg.omega_peak == 3.5
 
 
@@ -368,5 +368,40 @@ def test_blend_single_and_raw_out(tmp_path):
 
 
 def test_face_config_chain_default():
-    assert face_infer_config().chain == 0
+    assert face_infer_config().chain == 0 and face_infer_config().window == 129
     assert face_infer_config(chain=5).chain == 5
+
+
+def test_same_noise_repeats_the_window_noise():
+    from wilrosync.pipeline.lipsync import InferenceConfig
+
+    seen = []
+
+    class _Stop(Exception):
+        pass
+
+    class _Pipe(LipSyncPipeline):
+        def __init__(self):
+            self.device, self.dtype = torch.device("cpu"), torch.float32
+
+    pipe = _Pipe()
+    import wilrosync.pipeline.lipsync as lp
+    orig = lp.add_noise
+
+    def spy(z, noise, sigma):
+        seen.append(noise.clone())
+        raise _Stop
+
+    lp.add_noise = spy
+    try:
+        gen = torch.Generator().manual_seed(0)
+        for same in (True, True, False, False):
+            cfg = InferenceConfig(steps=2, same_noise=same)
+            try:
+                pipe._denoise_window(torch.zeros(1, 4, 3, 2, 2), None, None, None, None, None, None, True, cfg, gen)
+            except _Stop:
+                pass
+    finally:
+        lp.add_noise = orig
+    assert torch.equal(seen[0], seen[1])  # same noise in every window
+    assert not torch.equal(seen[2], seen[3])  # default: fresh noise per window
