@@ -76,10 +76,17 @@ def plan_windows(
 
 
 def blend_weights(windows: list[Window], num_frames: int, overlap: int) -> list[torch.Tensor]:
-    """Per-window weights over its real frames; weights of overlapping windows sum to 1."""
+    """Per-window weights over its real frames; weights of overlapping windows sum to 1.
+
+    ``overlap=0`` means a hard cut: when windows still overlap (the last window of a segment is shifted back to
+    end on the last frame), each frame comes from the earliest window that covers it, never a 50/50 average of
+    two different generations (which shows as a doubled mouth)."""
     raw = []
     for w in windows:
         wt = torch.ones(w.real_len)
+        if overlap == 0:
+            covered = max((o.end for o in windows if o.start < w.start < o.end), default=w.start)
+            wt[: max(0, min(covered, w.end) - w.start)] = 0.0
         if overlap > 0:
             ramp = torch.linspace(0, 1, overlap + 2)[1:-1]
             has_prev = any(o is not w and o.start < w.start < o.end for o in windows)

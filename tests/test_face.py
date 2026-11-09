@@ -367,7 +367,6 @@ def test_blend_single_and_raw_out(tmp_path):
     assert single.mean() > double.mean()
 
 
-def test_face_config_chains_by_default():
-    assert face_infer_config().chain == 5
-    assert face_infer_config(overlap=8).chain == 0  # overlap replaces chaining
-    assert face_infer_config(chain=0).chain == 0
+def test_face_config_chain_default():
+    assert face_infer_config().chain == 0
+    assert face_infer_config(chain=5).chain == 5

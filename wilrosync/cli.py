@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--overlap", type=int, default=None, help="default 0")
     fz.add_argument("--chain", type=int, default=None,
                     help="window chaining: each window continues the last N generated frames (1 + 4k, e.g. 9); "
-                         "fixes a change in look at window cuts. Default 5; 0 = off")
+                         "fixes a change in look at window cuts. Default 0 (off)")
     fz.add_argument("--seed", type=int, default=None)
     fz.add_argument("--preview", action="store_true", help="only write the crop with the mask drawn (no model)")
     fz.add_argument("--vae-bf16", action="store_true", help="bf16 VAE: faster, tiny colour/detail change")

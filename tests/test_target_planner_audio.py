@@ -72,3 +72,12 @@ def test_pingpong():
     assert pingpong_indices(4, 9).tolist() == [0, 1, 2, 3, 2, 1, 0, 1, 2]
     assert pingpong_indices(5, 3).tolist() == [0, 1, 2]
     assert np.all(pingpong_indices(1, 3) == 0)
+
+
+def test_overlap_zero_is_a_hard_cut():
+    n = 130  # two windows of 81: [0, 81) and [49, 130), sharing 32 frames
+    wins = plan_windows(n, window=81, overlap=0)
+    assert [(w.start, w.end) for w in wins] == [(0, 81), (49, 130)]
+    w0, w1 = blend_weights(wins, n, 0)
+    assert torch.all(w0 == 1)  # the first window keeps all its frames
+    assert torch.all(w1[:32] == 0) and torch.all(w1[32:] == 1)  # the second is used only after it
