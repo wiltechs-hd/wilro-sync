@@ -405,3 +405,21 @@ def test_same_noise_repeats_the_window_noise():
         lp.add_noise = orig
     assert torch.equal(seen[0], seen[1])  # same noise in every window
     assert not torch.equal(seen[2], seen[3])  # default: fresh noise per window
+
+
+def test_postroll_generates_extra_frames_after_the_end_and_drops_them(tmp_path):
+    from wilrosync.io.media import read_video
+
+    calls = {}
+
+    class _EchoPipe:
+        def __call__(self, frames, fps, wav, target=None, cfg=None):
+            calls.update(n=len(frames), wav=len(wav), last=frames[-1].copy(), mask_n=target.mask.shape[0])
+            return frames
+
+    video, audio = _media(tmp_path)  # 12 video frames, 18 frames of audio
+    out = lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "post.mp4"), cfg=face_infer_config(steps=1, window=9),
+                       size=64, detector=_FakeDetector(), landmarker=_FakeLandmarker(), preroll=2, postroll=5)
+    assert calls["n"] == 2 + 18 + 5 and calls["mask_n"] == 2 + 18 + 5
+    assert calls["wav"] == (2 + 18 + 5) * 640  # silence before and after
+    assert read_video(out)[0].shape[0] == 18  # extra frames dropped: same length as the audio

@@ -255,7 +255,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
                  landmarker: FaceLandmarker | None = None, crop: str = "auto", crop_smooth: int = 9,
-                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 0,
+                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 0, postroll: int = 0,
                  blend: str = "double", raw_out: str | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
@@ -265,6 +265,8 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
     loop:    reverse | restart | hold | trim, when the audio is longer than the video.
     preroll: extra frames generated before the start and dropped (first frames backwards + silence), so the
              first real frames are not generated cold; 8 (0.3 s) if the start of some videos looks bad.
+    postroll: the same at the end (last frames backwards + silence, generated and dropped), so the last real frames
+             have audio after them; 12 (0.5 s) if the end of some videos syncs badly.
     crop:    "fixed" (one window for the clip), "track" (the window follows the face like a lazy camera; for fast
              head motion) or "auto" (track only when the face moves more than half its size).
              ``crop_deadzone``: how far (x face) the face may drift before the tracked window moves;
@@ -320,9 +322,14 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
     cfg.max_side, cfg.loop_video = size, False
     # pre-roll: generate ``preroll`` extra frames before the start (the first frames played backwards, with
     # silence), then drop them, so the real first frame has motion and full audio context behind it
-    pre = int(max(0, min(preroll, t_src - 1)))
-    gen_idx = np.concatenate([idx[1:pre + 1][::-1], idx]) if pre else idx
-    gen_wav = np.concatenate([np.zeros(pre * 16000 // int(FPS), dtype=wav.dtype), wav]) if pre else wav
+    # post-roll: the same after the last frame, so the last frames have audio (silence) after them
+    n_out = len(idx)
+    pre = int(max(0, min(preroll, t_src - 1, n_out - 1)))
+    post = int(max(0, min(postroll, n_out - 1)))
+    spf = 16000 // int(FPS)  # audio samples per frame
+    gen_idx = np.concatenate([idx[1:pre + 1][::-1], idx, idx[-2::-1][:post]])
+    gen_wav = np.concatenate([np.zeros(pre * spf, dtype=wav.dtype), wav[:n_out * spf],
+                              np.zeros(post * spf, dtype=wav.dtype)])
     m_gen = len(gen_idx)
     target = None
     if mode == "lower":
@@ -331,7 +338,7 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
         target = TargetSignals(mask=masks_for(gen_idx, MASK_RES).contiguous(), mouth=mouth.float(),
                                face_width=torch.full((m_gen,), 0.55), presence=torch.ones(m_gen, dtype=torch.bool))
     cfg.composite = mode == "full"  # lower mode: the pipeline returns the raw crops, blended below
-    res = pipe(crops[gen_idx], FPS, gen_wav, target=target, cfg=cfg)[pre:]  # uint8 [N, size, size, 3]
+    res = pipe(crops[gen_idx], FPS, gen_wav, target=target, cfg=cfg)[pre:pre + n_out]  # uint8 [N, S, S, 3]
     if raw_out:
         write_video(raw_out, np.concatenate([crops[idx[:len(res)]], res], axis=2), FPS, audio_path=audio)
         print(f"raw crops (source | generated) -> {raw_out}")
