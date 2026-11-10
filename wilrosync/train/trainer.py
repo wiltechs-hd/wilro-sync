@@ -2,6 +2,7 @@
 
     x_sigma = (1 - sigma) z_ab + sigma eps,   target = eps - z_ab
     loss    = mean( W * || v_theta(x_sigma, z_cd, A_ab, text, sigma) - target ||^2 )
+            (+ lpips_weight * LPIPS on the decoded mouth crop at low sigma, optional; see perceptual.py)
 
 W = 1 + lambda * G_mouth optionally up-weights the mouth region. Audio / text are dropped at random
 so the same network also learns the unconditional prediction used by DS-CFG.
@@ -180,12 +181,22 @@ def train(cfg: TrainConfig) -> dict:
         with open(os.path.join(cfg.output_dir, "train_config.json"), "w") as f:
             json.dump(asdict(cfg), f, indent=2, default=str)
 
+    perc = _build_lpips(cfg, acc.device, base_dtype) if cfg.lpips_weight > 0 else None
+    if perc is not None:
+        acc.print(f"LPIPS loss: weight {cfg.lpips_weight}, sigma < {cfg.lpips_max_sigma}, "
+                  f"{cfg.lpips_latent_frames} latent frames, crop {cfg.lpips_crop} cells, every {cfg.lpips_every}")
+
     model.train()
-    history, t0, it = [], time.time(), iter(loader)
+    history, t0, it, micro = [], time.time(), iter(loader), 0
+    lp_hist: list[float] = []
     while step < cfg.max_steps:
         batch = next(it)
         with acc.accumulate(model):
-            loss = _loss(cfg, acc.unwrap_model(model), model, batch, null_text)
+            use_lp = perc is not None and micro % max(1, cfg.lpips_every) == 0
+            micro += 1
+            loss = _loss(cfg, acc.unwrap_model(model), model, batch, null_text, perc if use_lp else None)
+            if use_lp and perc.last is not None:
+                lp_hist.append(perc.last)
             acc.backward(loss)
             if acc.sync_gradients and cfg.max_grad_norm > 0:
                 acc.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], cfg.max_grad_norm)
@@ -202,18 +213,24 @@ def train(cfg: TrainConfig) -> dict:
         if step % cfg.log_every == 0 or step == 1:
             rate = step / max(time.time() - t0, 1e-6)
             lr_now = sched.get_last_lr()[0]
-            acc.print(f"step {step:>7d}  loss {lv:.4f}  lr {lr_now:.2e}  {rate:.2f} it/s")
+            lp_mean = sum(lp_hist) / len(lp_hist) if lp_hist else None
+            acc.print(f"step {step:>7d}  loss {lv:.4f}  lr {lr_now:.2e}  {rate:.2f} it/s"
+                      + (f"  lpips {lp_mean:.4f} (n={len(lp_hist)})" if lp_mean is not None else ""))
             if acc.is_main_process:
                 window = history[-cfg.log_every:]
+                rec = {"step": step, "loss": sum(window) / len(window), "lr": lr_now, "it_s": rate,
+                       "time": time.time()}
+                if lp_mean is not None:
+                    rec["lpips"] = lp_mean
                 with open(os.path.join(cfg.output_dir, "log.jsonl"), "a") as f:
-                    f.write(json.dumps({"step": step, "loss": sum(window) / len(window), "lr": lr_now,
-                                        "it_s": rate, "time": time.time()}) + "\n")
+                    f.write(json.dumps(rec) + "\n")
+            lp_hist = []
         if step % cfg.save_every == 0 or step == cfg.max_steps:
             _save(acc, model, ema, cfg, step)
     return {"steps": step, "losses": history}
 
 
-def _loss(cfg: TrainConfig, core: WanLipSyncTransformer, model, batch: dict, null_text) -> torch.Tensor:
+def _loss(cfg: TrainConfig, core: WanLipSyncTransformer, model, batch: dict, null_text, perc=None) -> torch.Tensor:
     z_ab, z_cd, sigma = batch["z_ab"].float(), batch["z_cd"].float(), batch["sigma"].float()
     b = z_ab.shape[0]
     dev = z_ab.device
@@ -244,7 +261,31 @@ def _loss(cfg: TrainConfig, core: WanLipSyncTransformer, model, batch: dict, nul
         err = err * w / w.mean()
     if not math.isfinite(err.mean().item()):
         raise FloatingPointError("non-finite loss")
-    return err.mean()
+    loss = err.mean()
+    if perc is not None:  # LPIPS on the decoded mouth crop of the one-step guess (low-noise samples only)
+        z0_hat = x_t.float() - sigma.view(-1, 1, 1, 1, 1) * v.float()
+        lp = perc(z0_hat, z_ab, sigma, batch["mouth"])
+        if lp is not None:
+            loss = loss + cfg.lpips_weight * lp
+    return loss
+
+
+def _build_lpips(cfg: TrainConfig, device, dtype):
+    """Frozen VAE + LPIPS network for ``lpips_weight > 0``."""
+    from ..models.backbone import WanVAE
+    from . import perceptual
+
+    if cfg.tiny_base is not None:  # tests: a tiny random VAE with the tiny model's latent channels
+        from diffusers import AutoencoderKLWan
+
+        z = cfg.tiny_base.get("in_channels", 16)
+        vae = WanVAE(AutoencoderKLWan(base_dim=16, z_dim=z, dim_mult=[1, 2, 2, 2], num_res_blocks=1,
+                                      latents_mean=[0.0] * z, latents_std=[1.0] * z))
+    else:
+        vae = WanVAE.from_pretrained(cfg.model.base_repo, torch_dtype=dtype)
+    return perceptual.LatentLPIPS(vae.to(device), perceptual.make_lpips(cfg.lpips_net).to(device),
+                                  crop=cfg.lpips_crop, latent_frames=cfg.lpips_latent_frames,
+                                  max_sigma=cfg.lpips_max_sigma)
 
 
 def _save(acc, model, ema, cfg: TrainConfig, step: int) -> None:

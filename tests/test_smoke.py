@@ -148,3 +148,41 @@ def test_pipeline_chained_windows(tiny_base, tiny_cfg):
         raise AssertionError("chain + overlap must be rejected")
     except ValueError:
         pass
+
+
+def test_lpips_loss_smoke(tmp_path, monkeypatch):
+    import torch.nn as nn
+
+    from wilrosync.flow import add_noise, target_velocity
+    from wilrosync.train import perceptual
+
+    # the one-step guess of the clean latents is exact for the true velocity
+    z, eps, s = torch.randn(2, 4, 3, 8, 8), torch.randn(2, 4, 3, 8, 8), torch.tensor([0.2, 0.7])
+    x_t = add_noise(z, eps, s)
+    torch.testing.assert_close(x_t - s.view(-1, 1, 1, 1, 1) * target_velocity(z, eps), z, atol=1e-5, rtol=0)
+    # crops stay inside the latent frame
+    mouth = torch.tensor([[[0.95, 0.95]] * 3, [[0.5, 0.6]] * 3])
+    assert perceptual.mouth_crop_boxes(mouth, (8, 8), 4) == [(4, 4, 4), (3, 2, 4)]
+
+    calls = []
+
+    class _FakeLPIPS(nn.Module):  # stands in for the pretrained network (no download in tests)
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Conv2d(3, 4, 3, padding=1).requires_grad_(False)
+
+        def forward(self, a, b):
+            calls.append(a.shape)
+            assert a.requires_grad and not b.requires_grad
+            return (self.conv(a) - self.conv(b)).abs().mean(dim=(1, 2, 3), keepdim=True)
+
+    monkeypatch.setattr(perceptual, "make_lpips", lambda net="alex": _FakeLPIPS())
+    cfg = load_config("configs/train/smoke_cpu.yaml", [f"output_dir={tmp_path}", "max_steps=3", "log_every=1",
+                                                      "lpips_weight=1.0", "lpips_max_sigma=1.1", "lpips_crop=4"])
+    out = train(cfg)
+    assert out["steps"] == 3 and all(np.isfinite(out["losses"]))
+    assert calls and calls[0][-1] == 4 * 8  # a 4-cell crop decodes to 32 px
+    import json
+
+    logs = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
+    assert all("lpips" in r for r in logs)

@@ -37,6 +37,12 @@ p_drop_audio: 0.15
 p_drop_text: 0.10
 p_drop_both: 0.05
 mouth_loss_weight: 0.0
+# perceptual loss on the decoded mouth crop (needs `pip install lpips`); 0 = off. Try 0.1 to 0.5.
+lpips_weight: 0.0
+lpips_max_sigma: 0.3
+lpips_latent_frames: 2
+lpips_crop: 24
+lpips_every: 1
 
 output_dir: runs/stage_a
 save_every: 2000

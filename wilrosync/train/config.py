@@ -53,6 +53,13 @@ class TrainConfig:
     p_drop_both: float = 0.05
     mouth_loss_weight: float = 0.0  # lambda for 1 + lambda * G_mouth loss weighting
     mouth_sigma_rel: float = 0.35
+    # perceptual loss on the decoded mouth area (see train/perceptual.py); 0 = off. Loads the VAE for training.
+    lpips_weight: float = 0.0
+    lpips_max_sigma: float = 0.3  # only samples below this noise level (the one-step guess is sharp there)
+    lpips_latent_frames: int = 2  # latent frames decoded per sample (2 -> 5 video frames)
+    lpips_crop: int = 24  # mouth crop side in latent cells (24 -> 192 px)
+    lpips_every: int = 1  # apply on every n-th micro-step (cost control)
+    lpips_net: str = "alex"  # alex | vgg
 
     output_dir: str = "runs/stage_a"
     save_every: int = 2000
