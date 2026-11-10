@@ -187,7 +187,8 @@ def train(cfg: TrainConfig) -> dict:
                   f"{cfg.lpips_latent_frames} latent frames, crop {cfg.lpips_crop} cells, every {cfg.lpips_every}")
 
     model.train()
-    history, t0, it, micro = [], time.time(), iter(loader), 0
+    history, it, micro = [], iter(loader), 0
+    t_log, s_log = time.time(), step
     lp_hist: list[float] = []
     while step < cfg.max_steps:
         batch = next(it)
@@ -211,10 +212,12 @@ def train(cfg: TrainConfig) -> dict:
         lv = acc.gather(loss.detach()).mean().item()
         history.append(lv)
         if step % cfg.log_every == 0 or step == 1:
-            rate = step / max(time.time() - t0, 1e-6)
+            now = time.time()
+            rate = (step - s_log) / max(now - t_log, 1e-6)  # since the last log line (not since step 0)
+            t_log, s_log = now, step
             lr_now = sched.get_last_lr()[0]
             lp_mean = sum(lp_hist) / len(lp_hist) if lp_hist else None
-            acc.print(f"step {step:>7d}  loss {lv:.4f}  lr {lr_now:.2e}  {rate:.2f} it/s"
+            acc.print(f"step {step:>7d}  loss {lv:.4f}  lr {lr_now:.2e}  {1 / max(rate, 1e-9):.1f} s/step"
                       + (f"  lpips {lp_mean:.4f} (n={len(lp_hist)})" if lp_mean is not None else ""))
             if acc.is_main_process:
                 window = history[-cfg.log_every:]
