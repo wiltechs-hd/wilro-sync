@@ -102,6 +102,13 @@ def cmd_lse(a: argparse.Namespace) -> None:
             f.writelines(json.dumps(r) + "\n" for r in rows)
 
 
+def cmd_background(a) -> None:
+    from .pipeline.background import replace_background
+
+    replace_background(a.video, a.out, a.bg, mask_video=a.mask_video, lo=a.lo, hi=a.hi, smooth=a.smooth,
+                       feather=a.feather, invert=a.invert, blur=a.blur, save_mask=a.save_mask)
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["sync-filter"]:  # own argument parser (also used by the notebook)
@@ -198,6 +205,22 @@ def main(argv: list[str] | None = None) -> None:
                    "(see `wilro-sync data --help`)")
     sub.add_parser("sync-filter", help="score a clip manifest with SyncNet and drop badly synced videos "
                    "(see `wilro-sync sync-filter --help`)")
+
+    bgp = sub.add_parser("background", help="replace the background of a video (person segmentation + composite)")
+    bgp.add_argument("--video", required=True)
+    bgp.add_argument("--out", required=True)
+    bgp.add_argument("--bg", required=True,
+                     help="image or video file, a colour (#00b140, green, white, ...), or 'blur' (original, blurred)")
+    bgp.add_argument("--mask-video", default=None,
+                     help="person mask video (white = person) from another tool instead of MediaPipe")
+    bgp.add_argument("--lo", type=float, default=0.3, help="mask: probability counted as background")
+    bgp.add_argument("--hi", type=float, default=0.7, help="mask: probability counted as person")
+    bgp.add_argument("--smooth", type=int, default=3, help="mask: frames of smoothing over time (less flicker)")
+    bgp.add_argument("--feather", type=float, default=1.5, help="mask: edge softness in pixels")
+    bgp.add_argument("--blur", type=float, default=25.0, help="--bg blur: blur strength in pixels")
+    bgp.add_argument("--invert", action="store_true", help="flip the mask")
+    bgp.add_argument("--save-mask", default=None, help="also write the mask used as a grey video")
+    bgp.set_defaults(func=cmd_background)
 
     ev = sub.add_parser("lse", help="LSE-C / LSE-D lip-sync metrics (SyncNet) for one or more videos")
     ev.add_argument("videos", nargs="+")

@@ -121,3 +121,27 @@ Built in:
   (`omega_peak · σ^γ ≤ min_scale`, the last 2 of 10 steps at the defaults): identical inside the mask, only the
   rim of the region lock differs (xlf at 54.8k: 7.24 without, 7.29 with). `InferenceConfig.skip_uncond` (on),
   `cfg_stop_sigma` (0 = only where exact).
+
+## Replacing the background
+
+A separate step, run on the finished (lip-synced) video. wilro-sync never changes anything outside the mouth,
+so this works the same on the original or the synced video.
+
+```bash
+wilro-sync background --video out.mp4 --bg office.jpg --out out_office.mp4    # image (scaled to cover)
+wilro-sync background --video out.mp4 --bg beach.mp4 --out out_beach.mp4      # video (looped)
+wilro-sync background --video out.mp4 --bg "#00b140" --out out_green.mp4      # colour (green screen)
+wilro-sync background --video out.mp4 --bg blur --out out_blur.mp4            # original background, blurred
+```
+
+The person is found with MediaPipe's selfie segmenter (Apache-2.0, downloaded once; fast, hair edges are rough).
+For cleaner edges, make a mask video with another tool (white = person; e.g. SAM 2 or BiRefNet) and pass
+`--mask-video mask.mp4`. `--save-mask m.mp4` writes the mask that was used, to check it.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--lo` / `--hi` | 0.3 / 0.7 | Segmenter probability counted as background / person; a narrower range gives firmer edges. |
+| `--smooth` | 3 | Frames of smoothing over time, against flickering edges (higher = steadier, but lags fast motion). |
+| `--feather` | 1.5 | Edge softness in pixels. |
+| `--blur` | 25 | Blur strength for `--bg blur`. |
+| `--invert` | off | Flip the mask (if the person and the background come out swapped). |
