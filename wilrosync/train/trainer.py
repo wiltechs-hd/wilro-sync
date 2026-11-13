@@ -126,6 +126,13 @@ class EMA:
         self.shadow = {n: p.detach().clone().float() for n, p in model.named_parameters() if p.requires_grad}
 
     @torch.no_grad()
+    def reset(self, model: torch.nn.Module) -> None:
+        """Start averaging again from the model's current weights."""
+        params = dict(model.named_parameters())
+        for n in self.shadow:
+            self.shadow[n] = params[n].detach().clone().float()
+
+    @torch.no_grad()
     def update(self, model: torch.nn.Module) -> None:
         for n, p in model.named_parameters():
             if n in self.shadow:
@@ -173,6 +180,9 @@ def train(cfg: TrainConfig) -> dict:
         with open(os.path.join(cfg.resume_from, "step.json")) as f:
             step = json.load(f)["step"]
         bases = _apply_config_lrs(cfg, opt, sched)
+        if ema is not None:  # the EMA was built before the weights were loaded: restart it from the resumed weights
+            ema.reset(acc.unwrap_model(model))
+            acc.print("EMA restarted from the resumed weights")
         acc.print(f"resumed at step {step}; learning rates {bases} x {_lr_lambda(cfg)(step):.3f}"
                   + (f", cosine decay from step {cfg.lr_decay_start} to {cfg.lr_min_ratio:g}x at {cfg.max_steps}"
                      if cfg.lr_decay_start is not None else ""))

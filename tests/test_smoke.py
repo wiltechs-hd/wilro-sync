@@ -186,3 +186,19 @@ def test_lpips_loss_smoke(tmp_path, monkeypatch):
 
     logs = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
     assert all("lpips" in r for r in logs)
+
+
+def test_resume_restarts_ema_from_the_resumed_weights(tmp_path):
+    from safetensors.torch import load_file
+
+    cfg = load_config("configs/train/smoke_cpu.yaml", [f"output_dir={tmp_path}", "save_every=10", "lr=0.05",
+                                                      "lr_new=0.05"])
+    train(cfg)
+    raw10 = load_file(str(tmp_path / "step_0000010" / "wilrosync_trainable.safetensors"))
+    cfg2 = load_config("configs/train/smoke_cpu.yaml", [f"output_dir={tmp_path}", "max_steps=11", "lr=0.0",
+                                                       "lr_new=0.0", f"resume_from={tmp_path / 'step_0000010'}"])
+    train(cfg2)
+    ema11 = load_file(str(tmp_path / "step_0000011" / "ema" / "wilrosync_trainable.safetensors"))
+    # with the learning rate at 0 the weights stay at step 10, so a correctly restarted EMA equals them
+    for k, v in raw10.items():
+        torch.testing.assert_close(ema11[k].float(), v.float(), atol=1e-5, rtol=1e-4)
