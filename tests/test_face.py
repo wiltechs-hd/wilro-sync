@@ -423,3 +423,34 @@ def test_postroll_generates_extra_frames_after_the_end_and_drops_them(tmp_path):
     assert calls["n"] == 2 + 18 + 5 and calls["mask_n"] == 2 + 18 + 5
     assert calls["wav"] == (2 + 18 + 5) * 640  # silence before and after
     assert read_video(out)[0].shape[0] == 18  # extra frames dropped: same length as the audio
+
+
+def test_reference_indices():
+    from wilrosync.pipeline.face import reference_indices
+
+    s = np.arange(10)
+    assert reference_indices(s, 10, "same") is None
+    sh = reference_indices(s, 10, "shift")
+    assert sh[0] == 5 and sh.min() >= 0 and sh.max() <= 9 and np.abs(np.diff(sh)).max() == 1  # no jumps
+    assert list(reference_indices(s, 10, "reverse")) == list(range(9, -1, -1))
+    st = reference_indices(s, 10, "stride2")
+    assert st[0] == 5 and st.max() <= 9 and np.abs(np.diff(st)).max() <= 2
+    assert np.all(sh != s) and np.all(st[1:] != s[1:])  # never the frame being edited (except by chance)
+
+
+def test_reference_is_passed_to_the_pipeline(tmp_path):
+    seen = {}
+
+    class _EchoPipe:
+        def __call__(self, frames, fps, wav, target=None, cfg=None, ref_frames=None):
+            seen["ref"] = None if ref_frames is None else ref_frames.copy()
+            seen["frames"] = frames.copy()
+            return frames
+
+    video, audio = _media(tmp_path)
+    kw = dict(cfg=face_infer_config(steps=1, window=9), size=64, detector=_FakeDetector(),
+              landmarker=_FakeLandmarker(), preroll=0, postroll=0)
+    lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "same.mp4"), **kw)
+    assert seen["ref"] is None
+    lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "rev.mp4"), reference="reverse", **kw)
+    assert seen["ref"].shape == seen["frames"].shape

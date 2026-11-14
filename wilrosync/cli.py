@@ -70,7 +70,7 @@ def cmd_infer_face(a: argparse.Namespace) -> None:
     lipsync_face(pipe, a.video, a.audio, a.out, bbox=a.bbox, cfg=cfg, size=a.size, scale=a.scale, mode=a.mode,
                  loop=a.loop, oval=oval, track=track, preview=a.preview, crop=a.crop, crop_smooth=a.crop_smooth,
                  crop_deadzone=a.crop_deadzone, det_every=a.det_every,
-                 preroll=a.preroll, postroll=a.postroll, blend=a.blend, raw_out=a.raw_out)
+                 preroll=a.preroll, postroll=a.postroll, reference=a.reference, blend=a.blend, raw_out=a.raw_out)
     if pipe is not None and a.profile:
         print("timings (s):", {k: round(v, 1) for k, v in pipe.timings.items()})
 
@@ -169,6 +169,9 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--det-every", type=int, default=None, help="face detection every n-th frame (5 fixed / 1 track)")
     fz.add_argument("--preroll", type=int, default=8,
                     help="frames generated before the start and dropped (e.g. 8) if the first frames look bad")
+    fz.add_argument("--reference", default="same", choices=["same", "shift", "reverse", "stride2"],
+                    help="frames the model is conditioned on: same (default), shift (half the clip later), "
+                         "reverse, stride2 (twice as fast, shifted)")
     fz.add_argument("--postroll", type=int, default=12,
                     help="frames generated after the end and dropped (fixes bad last frames); 0 = off")
     fz.add_argument("--blend", default="double", choices=["double", "single"],

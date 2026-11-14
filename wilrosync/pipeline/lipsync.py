@@ -167,8 +167,12 @@ class LipSyncPipeline:
 
     # ------------------------------------------------------------------ helpers
     def _denoise_window(self, z_src, text, audio_tokens, null_tokens, mask_lat, mouth_lat, fw_lat,
-                        full_frame: bool, cfg: InferenceConfig, generator, force_lock: bool = False) -> torch.Tensor:
+                        full_frame: bool, cfg: InferenceConfig, generator, force_lock: bool = False,
+                        z_ref: torch.Tensor | None = None) -> torch.Tensor:
+        """``z_src``: the source latents (noise start and region lock); ``z_ref``: the reference the model is
+        conditioned on (default ``z_src``)."""
         dev, dt = self.device, self.dtype
+        z_cond = z_src if z_ref is None else z_ref
         if cfg.same_noise:
             generator = torch.Generator().manual_seed(cfg.seed)
         noise = torch.randn(z_src.shape, generator=generator, dtype=torch.float32).to(dev, dt)
@@ -181,14 +185,14 @@ class LipSyncPipeline:
         if (cfg.region_lock and not full_frame) or force_lock:  # force: chained context, also in full-frame mode
             lock = RegionLock(z_src, noise, mask_lat.to(dev), cfg.release_steps, cfg.release_dilate)
         text2 = torch.cat([text, text])
-        zc2 = torch.cat([z_src, z_src])
+        zc2 = torch.cat([z_cond, z_cond])
         audio2 = torch.cat([audio_tokens, null_tokens])
         d = cfg.dscfg
         for i in range(cfg.steps):
             s, s1 = sigmas[i], sigmas[i + 1]
             if self._cond_only(s, cfg, lock is not None):
                 t = sigma_to_timestep(s).to(dev).expand(1)
-                v = self.transformer(x, z_src, t, text, audio_tokens).float()
+                v = self.transformer(x, z_cond, t, text, audio_tokens).float()
             else:
                 t = sigma_to_timestep(s).to(dev).expand(2)
                 v_c, v_u = self.transformer(torch.cat([x, x]), zc2, t, text2, audio2).chunk(2)
@@ -222,9 +226,16 @@ class LipSyncPipeline:
         target: TargetSignals | None = None,
         cfg: InferenceConfig | None = None,
         progress: bool = True,
+        ref_frames: np.ndarray | None = None,
     ) -> np.ndarray:
         """frames: uint8 [T, H, W, 3]; wav: mono float32 at 16 kHz. Returns uint8 frames whose length
-        matches the audio (video ping-ponged if needed, or trimmed)."""
+        matches the audio (video ping-ponged if needed, or trimmed).
+
+        ref_frames: optional reference video, same shape as ``frames``, that the model is conditioned on instead
+        of ``frames`` (training always paired the target with a reference from another moment). The noise start
+        and the region lock still use ``frames``."""
+        if ref_frames is not None and ref_frames.shape != frames.shape:
+            raise ValueError(f"ref_frames {ref_frames.shape} must match frames {frames.shape}")
         cfg = cfg or InferenceConfig()
         self._profile = cfg.profile
         if cfg.profile:
@@ -237,6 +248,7 @@ class LipSyncPipeline:
             raise ValueError("audio is shorter than one video frame")
         idx = pingpong_indices(t_src, n)
         frames = frames[idx]
+        self._ref = None if ref_frames is None else ref_frames[idx]
         target = (target or TargetSignals.whole_frame(t_src, h, w)).select(idx)
         ph, pw = processing_size(h, w, cfg.max_side, cfg.size_multiple)
 
@@ -309,6 +321,12 @@ class LipSyncPipeline:
         src = src.permute(1, 0, 2, 3).unsqueeze(0).to(self.device)  # [1, 3, L, H', W']
         with self._timed("vae encode"):
             z_src = self.vae.encode(src).to(self.dtype)
+            z_ref = None
+            ref = getattr(self, "_ref", None)
+            if ref is not None:
+                r = F.interpolate(_to_tensor(ref[pad_idx]), size=(ph, pw), mode="bilinear", align_corners=False,
+                                  antialias=True)
+                z_ref = self.vae.encode(r.permute(1, 0, 2, 3).unsqueeze(0).to(self.device)).to(self.dtype)
         tf = self.vae.temporal_factor
         tsig = target.slice(win.start, win.end).pad_to(win.length)
         tsig_p = TargetSignals(tsig.resized_mask(ph, pw), tsig.mouth, tsig.face_width, tsig.presence,
@@ -322,7 +340,7 @@ class LipSyncPipeline:
         null = self.transformer.null_audio(1, tokens.shape[1]).to(tokens.dtype)
         with self._timed("denoise"):
             x = self._denoise_window(z_src, text, tokens, null, mask_lat, mouth_lat, fw_lat, tsig.full_frame,
-                                     cfg, gen, force_lock=n_lock > 0)
+                                     cfg, gen, force_lock=n_lock > 0, z_ref=z_ref)
         with self._timed("vae decode"):
             video = self.vae.decode(x)[0].permute(1, 0, 2, 3)  # [L, 3, H', W']
         return video[: win.real_len].float().cpu()

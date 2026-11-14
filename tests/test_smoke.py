@@ -202,3 +202,28 @@ def test_resume_restarts_ema_from_the_resumed_weights(tmp_path):
     # with the learning rate at 0 the weights stay at step 10, so a correctly restarted EMA equals them
     for k, v in raw10.items():
         torch.testing.assert_close(ema11[k].float(), v.float(), atol=1e-5, rtol=1e-4)
+
+
+def test_pipeline_reference_conditions_the_model(tiny_base, tiny_cfg):
+    model = WanLipSyncTransformer(tiny_base, tiny_cfg).eval()
+    pipe = LipSyncPipeline(model, _tiny_vae(), _Text(), _Audio(), device="cpu", dtype=torch.float32)
+    rng = np.random.default_rng(3)
+    t, h, w = 9, 32, 32
+    frames = rng.integers(0, 255, size=(t, h, w, 3), dtype=np.uint8)
+    wav = np.zeros(int(16000 * t / 25), dtype=np.float32)
+    target = TargetSignals.from_bbox(t, h, w, (4, 4, 28, 28))
+    conds = []
+    fwd = model.forward
+
+    def spy(x_t, z_cond, *a, **k):
+        conds.append(z_cond.detach().clone())
+        return fwd(x_t, z_cond, *a, **k)
+
+    model.forward = spy
+    cfg = InferenceConfig(steps=2, window=9, overlap=0, max_side=32, loop_video=False)
+    out_same = pipe(frames, 25.0, wav, target=target, cfg=cfg, progress=False)
+    n_same = len(conds)
+    out_ref = pipe(frames, 25.0, wav, target=target, cfg=cfg, progress=False, ref_frames=frames[::-1].copy())
+    assert not torch.equal(conds[0], conds[n_same])  # the model saw a different reference
+    assert out_same.shape == out_ref.shape
+    assert np.array_equal(out_same[:, :2], out_ref[:, :2])  # outside the target: still the real frames
