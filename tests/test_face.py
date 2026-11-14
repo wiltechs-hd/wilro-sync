@@ -331,7 +331,7 @@ def test_preroll_generates_extra_frames_and_drops_them(tmp_path):
     calls = {}
 
     class _EchoPipe:  # returns the crops it was given, records what it got
-        def __call__(self, frames, fps, wav, target=None, cfg=None):
+        def __call__(self, frames, fps, wav, target=None, cfg=None, **_):
             calls.update(n=len(frames), wav=len(wav), first=frames[0].copy(), mask_n=target.mask.shape[0])
             return frames
 
@@ -349,7 +349,7 @@ def test_blend_single_and_raw_out(tmp_path):
     seen = []
 
     class _BrightPipe:  # returns white crops, records whether the pipeline was asked to blend
-        def __call__(self, frames, fps, wav, target=None, cfg=None):
+        def __call__(self, frames, fps, wav, target=None, cfg=None, **_):
             seen.append(cfg.composite)
             return np.full_like(frames, 255)
 
@@ -413,7 +413,7 @@ def test_postroll_generates_extra_frames_after_the_end_and_drops_them(tmp_path):
     calls = {}
 
     class _EchoPipe:
-        def __call__(self, frames, fps, wav, target=None, cfg=None):
+        def __call__(self, frames, fps, wav, target=None, cfg=None, **_):
             calls.update(n=len(frames), wav=len(wav), last=frames[-1].copy(), mask_n=target.mask.shape[0])
             return frames
 
@@ -450,7 +450,9 @@ def test_reference_is_passed_to_the_pipeline(tmp_path):
     video, audio = _media(tmp_path)
     kw = dict(cfg=face_infer_config(steps=1, window=9), size=64, detector=_FakeDetector(),
               landmarker=_FakeLandmarker(), preroll=0, postroll=0)
-    lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "same.mp4"), **kw)
+    lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "same.mp4"), reference="same", **kw)
     assert seen["ref"] is None
+    lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "default.mp4"), **kw)
+    assert seen["ref"] is not None  # stride2 by default
     lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "rev.mp4"), reference="reverse", **kw)
     assert seen["ref"].shape == seen["frames"].shape

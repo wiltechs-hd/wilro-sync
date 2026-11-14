@@ -169,9 +169,9 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--det-every", type=int, default=None, help="face detection every n-th frame (5 fixed / 1 track)")
     fz.add_argument("--preroll", type=int, default=8,
                     help="frames generated before the start and dropped (e.g. 8) if the first frames look bad")
-    fz.add_argument("--reference", default="same", choices=["same", "shift", "reverse", "stride2"],
-                    help="frames the model is conditioned on: same (default), shift (half the clip later), "
-                         "reverse, stride2 (twice as fast, shifted)")
+    fz.add_argument("--reference", default="stride2", choices=["same", "shift", "reverse", "stride2"],
+                    help="frames the model is conditioned on: stride2 (default; twice as fast, shifted), same (the frames "
+                         "being edited), shift (half the clip later), reverse")
     fz.add_argument("--postroll", type=int, default=12,
                     help="frames generated after the end and dropped (fixes bad last frames); 0 = off")
     fz.add_argument("--blend", default="double", choices=["double", "single"],
