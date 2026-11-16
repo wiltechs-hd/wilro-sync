@@ -16,21 +16,34 @@ is kept bit-exact.
 
 ## Results
 
-The same new audio on the same source video: the original (its own mouth, shown with the new audio), [LatentSync](https://github.com/bytedance/LatentSync)
-and wilro-sync, side by side. Click a picture to open the video (with sound).
+The same new audio on the same source video, side by side. The original shows the source with its own mouth.
+Example 1 is the demo clip from the [LatentSync](https://github.com/bytedance/LatentSync) repository, and its
+LatentSync column is LatentSync's own published result.
 
-| Comparison | |
-|---|---|
-| [![Original vs LatentSync vs wilro-sync, example 1](results/compare1.jpg)](results/compare1.mp4) | **Example 1**: phone video. |
-| [![Original vs LatentSync vs wilro-sync, example 2](results/compare2.jpg)](results/compare2.mp4) | **Example 2**: generated portrait. |
+<table>
+  <tr>
+    <th width="33%">Original</th>
+    <th width="33%">LatentSync</th>
+    <th width="33%">wilro-sync</th>
+  </tr>
+  <tr>
+    <td><video src="https://github.com/user-attachments/assets/1480b26e-5dc4-445d-8399-76e3515fe39c" controls preload="metadata" width="100%"></video></td>
+    <td><video src="https://github.com/user-attachments/assets/ac791682-1541-4e6a-aa11-edd9427b977e" controls preload="metadata" width="100%"></video></td>
+    <td><video src="https://github.com/user-attachments/assets/adc11133-f8b9-4c9c-8cfd-9bd50d628cc4" controls preload="metadata" width="100%"></video></td>
+  </tr>
+  <tr>
+    <td><video src="https://github.com/user-attachments/assets/c06d77c9-ee9f-4503-aed5-4a3f2d5ada21" controls preload="metadata" width="100%"></video></td>
+    <td><video src="https://github.com/user-attachments/assets/0d1287fb-9d0e-46a4-bdd5-0c8e9d1c7e19" controls preload="metadata" width="100%"></video></td>
+    <td><video src="https://github.com/user-attachments/assets/3fc00115-37f8-42c2-9f11-d2ab03661f48" controls preload="metadata" width="100%"></video></td>
+  </tr>
+</table>
 
 wilro-sync only:
 
 [![wilro-sync, two people](results/wilro3.jpg)](results/wilro3.mp4)
 
-Single videos: [original 1](results/original1.mp4), [LatentSync 1](results/latentsync1.mp4),
-[wilro-sync 1](results/wilro1.mp4) · [original 2](results/original2.mp4), [LatentSync 2](results/latentsync2.mp4),
-[wilro-sync 2](results/wilro2.mp4) · [wilro-sync 3](results/wilro3.mp4)
+The videos are also in [`results/`](results/) (side-by-side versions: [example 1](results/compare1.mp4),
+[example 2](results/compare2.mp4)).
 
 ## How it works
 
