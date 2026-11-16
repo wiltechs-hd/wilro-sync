@@ -14,6 +14,24 @@ is kept bit-exact.
 
 ![architecture](docs/assets/architecture.svg)
 
+## Results
+
+The same new audio on the same source video: the original (its own mouth, shown with the new audio), [LatentSync](https://github.com/bytedance/LatentSync)
+and wilro-sync, side by side. Click a picture to open the video (with sound).
+
+| Comparison | |
+|---|---|
+| [![Original vs LatentSync vs wilro-sync, example 1](results/compare1.jpg)](results/compare1.mp4) | **Example 1**: phone video. |
+| [![Original vs LatentSync vs wilro-sync, example 2](results/compare2.jpg)](results/compare2.mp4) | **Example 2**: generated portrait. |
+
+wilro-sync only:
+
+[![wilro-sync, two people](results/wilro3.jpg)](results/wilro3.mp4)
+
+Single videos: [original 1](results/original1.mp4), [LatentSync 1](results/latentsync1.mp4),
+[wilro-sync 1](results/wilro1.mp4) · [original 2](results/original2.mp4), [LatentSync 2](results/latentsync2.mp4),
+[wilro-sync 2](results/wilro2.mp4) · [wilro-sync 3](results/wilro3.mp4)
+
 ## How it works
 
 | Piece | Paper | Where |

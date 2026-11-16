@@ -27,3 +27,6 @@ wandb/
 
 # local scratch from the Claude desktop app
 Claude outputs/
+
+# demo videos shown in the README
+!results/*.mp4
