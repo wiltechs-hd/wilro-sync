@@ -43,7 +43,7 @@ face (`--bbox` around it in the first frame; it is then tracked through the clip
 pixel outside the selected mouth, stays exactly as in the source. In this example only the woman on the right
 is lip-synced; the man is untouched:
 
-<video src="https://github.com/user-attachments/assets/84855d94-16da-49a9-93b6-68052cdb82e1" controls preload="metadata" width="100%"></video>
+https://github.com/user-attachments/assets/84855d94-16da-49a9-93b6-68052cdb82e1
 
 ```bash
 wilro-sync infer-face --ckpt ... --video two_people.mp4 --audio her_voice.wav --out out.mp4 --bbox 575,140,675,255
