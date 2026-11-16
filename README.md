@@ -110,11 +110,10 @@ Detector-based target selection (reference image, track id, active speaker) is m
 
 ## Training
 
-Which datasets to use and how to prepare them: [docs/DATASETS.md](docs/DATASETS.md) (HDTF to start, TalkVid to
-scale, MEAD for pseudo pairs).
+How to prepare training data: [docs/DATASETS.md](docs/DATASETS.md).
 
 ```bash
-# 1. data stage: download HDTF/TalkVid segments, face-crop, SyncNet-filter, pre-compute latents
+# 1. data stage: collect clips, face-crop, SyncNet-filter, pre-compute latents
 pip install -e ".[data]"
 wilro-sync data smoke --work /data/wilro          # then first_model, paper_scale (docs/DATASETS.md)
 
@@ -164,4 +163,4 @@ and consent to edit, label synthetic media as such, and do not use this project 
 ## License
 
 Code: Apache-2.0. Model weights (when released) may carry additional restrictions inherited from the
-training datasets (e.g. MEAD, VoxCeleb2 and HDTF are research-only).
+training data (many public talking-face datasets are licensed for research only).
