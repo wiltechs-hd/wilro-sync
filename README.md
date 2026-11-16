@@ -2,11 +2,9 @@
 
 Mask-free, diffusion-transformer lip sync that only moves the face you choose.
 
-wilro-sync is an independent, open-source implementation of
-[**OmniSync: Towards Universal Lip Synchronization via Diffusion Transformers**](https://arxiv.org/abs/2505.21448)
-(Peng et al., NeurIPS 2025) on top of the open [Wan2.x](https://github.com/Wan-Video/Wan2.2) video DiT. It
-adds **target-face control**: in multi-face scenes only the selected face is lip-synced, and every other pixel
-is kept bit-exact.
+wilro-sync is built on the open [Wan2.x](https://github.com/Wan-Video/Wan2.2) video DiT. It adds
+**target-face control**: in multi-face scenes only the selected face is lip-synced, and every other pixel is
+kept bit-exact.
 
 > **Status: pre-alpha.** The model, training and inference code is in place and tested on CPU with tiny
 > random models and against the real Wan2.1-1.3B weights. **No trained checkpoint has been released yet.**
@@ -56,7 +54,7 @@ The videos are also in [`results/`](results/) (side-by-side versions: [example 1
 
 ## How it works
 
-| Piece | Paper | Where |
+| Piece | OmniSync paper ([see Citation](#citation)) | Where |
 |---|---|---|
 | Mask-free conditional flow matching `(V_cd, A_ab) → V_ab` | §3.2 | `wilrosync/train/trainer.py` |
 | Source latent channel-concatenated with the noisy latent | Fig. 2 | `wilrosync/models/dit_lipsync.py` |
