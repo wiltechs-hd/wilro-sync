@@ -38,9 +38,18 @@ LatentSync column is LatentSync's own published result.
   </tr>
 </table>
 
-wilro-sync only:
+**Lip-syncing only the face you choose.** In a scene with several people, wilro-sync syncs only the selected
+face (`--bbox` around it in the first frame; it is then tracked through the clip). Every other face, and every
+pixel outside the selected mouth, stays exactly as in the source. In this example only the woman on the right
+is lip-synced; the man is untouched:
 
-[![wilro-sync, two people](results/wilro3.jpg)](results/wilro3.mp4)
+<video src="https://github.com/user-attachments/assets/0eb26b47-b7ae-402f-826f-e6e5935f4ffd" controls preload="metadata" width="100%"></video>
+
+```bash
+wilro-sync infer-face --ckpt ... --video two_people.mp4 --audio her_voice.wav --out out.mp4 --bbox 575,140,675,255
+```
+
+Run it once per face, each with its own audio track, to make a dialogue.
 
 The videos are also in [`results/`](results/) (side-by-side versions: [example 1](results/compare1.mp4),
 [example 2](results/compare2.mp4)).
