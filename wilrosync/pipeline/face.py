@@ -147,7 +147,7 @@ def find_face_window(frames: np.ndarray, bbox=None, scale: float = 1.8, detector
     def detect(step):
         b = track_face(det, frames[::step], init_box=bbox)
         if b is None:
-            raise RuntimeError("no stable face found; pass bbox=(x0, y0, x1, y1)")
+            raise ValueError("no stable face found; pass bbox=(x0, y0, x1, y1)")
         sz = np.maximum(b[:, 2] - b[:, 0], b[:, 3] - b[:, 1])
         bx, by = (b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2
         return b, sz, bx, by, float(np.median(sz)), max(np.ptp(bx), np.ptp(by))

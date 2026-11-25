@@ -109,6 +109,20 @@ def cmd_background(a) -> None:
                        feather=a.feather, invert=a.invert, blur=a.blur, save_mask=a.save_mask)
 
 
+def cmd_serve(a) -> None:
+    try:
+        import uvicorn
+
+        from .server import ServerConfig, create_app
+    except ImportError:
+        raise SystemExit("pip install -e \".[server]\"  (fastapi + uvicorn + python-multipart)") from None
+
+    cfg = ServerConfig(ckpt=a.ckpt, device=a.device, dtype=a.dtype, vae_bf16=a.vae_bf16,
+                       text_device=a.text_device, api_key=a.api_key, max_queue=a.max_queue,
+                       ckpt_root=a.ckpt_root, keep_minutes=a.keep_minutes, cors=a.cors)
+    uvicorn.run(create_app(cfg), host=a.host, port=a.port, workers=1, log_level="info")
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["sync-filter"]:  # own argument parser (also used by the notebook)
@@ -224,6 +238,25 @@ def main(argv: list[str] | None = None) -> None:
     bgp.add_argument("--invert", action="store_true", help="flip the mask")
     bgp.add_argument("--save-mask", default=None, help="also write the mask used as a grey video")
     bgp.set_defaults(func=cmd_background)
+
+    srv = sub.add_parser("serve", help="serve lip-sync inference over HTTP (docs/server.md)")
+    srv.add_argument("--ckpt", required=True,
+                     help="checkpoint directory (a step_* dir, or a runs/ dir: uses its newest)")
+    srv.add_argument("--host", default="127.0.0.1")
+    srv.add_argument("--port", type=int, default=8000)
+    srv.add_argument("--device", default=None, help="default: cuda when available, else cpu")
+    srv.add_argument("--text-device", default=None, help="e.g. cpu to keep umT5 off the GPU")
+    srv.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
+    srv.add_argument("--vae-bf16", action="store_true", help="bf16 VAE: faster, tiny colour/detail change")
+    srv.add_argument("--api-key", default=None, help="require the X-API-Key header with this value")
+    srv.add_argument("--max-queue", type=int, default=8,
+                     help="jobs allowed to wait while one runs on the GPU (default 8; extra -> 429)")
+    srv.add_argument("--ckpt-root", default=None,
+                     help="allow a per-request `ckpt` field naming a checkpoint inside this dir")
+    srv.add_argument("--keep-minutes", type=float, default=60.0,
+                     help="keep finished job results downloadable for this long (default 60)")
+    srv.add_argument("--cors", action="store_true", help="allow browser calls from any origin")
+    srv.set_defaults(func=cmd_serve)
 
     ev = sub.add_parser("lse", help="LSE-C / LSE-D lip-sync metrics (SyncNet) for one or more videos")
     ev.add_argument("videos", nargs="+")
