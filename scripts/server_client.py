@@ -148,6 +148,14 @@ def main() -> int:
 
     if not args.server:
         ap.error("server URL is required (or set WILROSYNC_URL)")
+    if not args.server.startswith(("http://", "https://")):
+        # first positional was the video (WILROSYNC_URL style): shift the positionals left
+        if not os.environ.get("WILROSYNC_URL"):
+            ap.error("first argument is not a URL and WILROSYNC_URL is not set")
+        args.video, args.audio, extra = args.server, args.video, args.audio
+        args.server = os.environ["WILROSYNC_URL"]
+        if extra:
+            args.fields.insert(0, extra)
     base = args.server.rstrip("/")
     if args.health:
         status, body = get(f"{base}/health", None)
