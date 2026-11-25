@@ -227,3 +227,44 @@ def test_pipeline_reference_conditions_the_model(tiny_base, tiny_cfg):
     assert not torch.equal(conds[0], conds[n_same])  # the model saw a different reference
     assert out_same.shape == out_ref.shape
     assert np.array_equal(out_same[:, :2], out_ref[:, :2])  # outside the target: still the real frames
+
+
+def test_saved_prompt_embeds(tmp_path, tiny_base, tiny_cfg):
+    import json
+
+    import pytest
+
+    from wilrosync.models import backbone
+    from wilrosync.models.dit_lipsync import CONFIG_NAME
+    from wilrosync.pipeline import lipsync as lp
+
+    emb = torch.randn(1, 12, 16)
+    path = str(tmp_path / "prompt.safetensors")
+    LipSyncPipeline.save_prompt_embeds(path, "hello", emb)
+    model = WanLipSyncTransformer(tiny_base, tiny_cfg).eval()
+    pipe = LipSyncPipeline(model, None, None, None, device="cpu", dtype=torch.float32)
+    assert pipe.load_prompt_embeds(path) == "hello"
+    torch.testing.assert_close(pipe.encode_prompt("hello"), emb)
+    with pytest.raises(ValueError, match="not in the saved prompt"):
+        pipe.encode_prompt("another prompt")  # no text encoder: refused instead of loading umT5
+
+    class _FakeT5:  # encode-prompt loads only the text encoder named by the checkpoint
+        calls = []
+
+        @classmethod
+        def from_pretrained(cls, repo, torch_dtype=None, device=None):
+            cls.calls.append((repo, device))
+            return lambda prompts: torch.ones(len(prompts), 3, 4)
+
+    ckpt = tmp_path / "step_1"
+    ckpt.mkdir()
+    (ckpt / CONFIG_NAME).write_text(json.dumps({"base_repo": "some/repo"}))
+    orig = backbone.T5TextEncoder
+    backbone.T5TextEncoder = _FakeT5
+    try:
+        out = lp.encode_prompt_file(str(ckpt), str(tmp_path / "p.safetensors"), "hi", device="cpu")
+    finally:
+        backbone.T5TextEncoder = orig
+    assert _FakeT5.calls == [("some/repo", "cpu")]
+    pipe2 = LipSyncPipeline(model, None, None, None, device="cpu", dtype=torch.float32)
+    assert pipe2.load_prompt_embeds(out) == "hi"

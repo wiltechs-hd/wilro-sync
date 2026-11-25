@@ -171,3 +171,20 @@ Proxies time long connections out, so prefer `POST /jobs` + `GET /jobs/{id}` ove
 - Security: bind to 127.0.0.1 and put a proxy in front, or set `--api-key`; there is no HTTPS. `--cors`
   allows browser apps to call the API directly. Treat uploads as untrusted input: the server only
   writes them to temp files and hands them to ffmpeg/imageio.
+
+## Small-memory devices (Jetson)
+
+The text encoder (umT5, about 11 GB) is only used to encode the prompt, which never changes. On a device where
+CPU and GPU share 16 GB or less (e.g. Jetson Orin NX), loading it next to the model runs out of memory. Encode
+the prompt once while nothing else is running, then start the server with the saved file; the text encoder is
+then never loaded (requests with a different `prompt` get a 400):
+
+```bash
+wilro-sync encode-prompt --ckpt ~/wilro/ckpt/step_0057000 --out ~/wilro/prompt.safetensors    # once, on the CPU
+wilro-sync serve --ckpt ~/wilro/ckpt/step_0057000 --text-embeds ~/wilro/prompt.safetensors \
+    --host 0.0.0.0 --port 8000 --api-key <key> --vae-bf16
+```
+
+The file can also be made on another machine (it is a few MB) and copied over. After encoding, the text encoder
+can be removed from the Hugging Face cache to free about 11 GB of disk (the rest of the base model is still
+needed). `wilro-sync infer-face` takes the same `--text-embeds` option.
