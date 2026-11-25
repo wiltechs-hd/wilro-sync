@@ -39,7 +39,8 @@ Errors are JSON `{"detail": ...}`: 400 bad field/file, 401 bad `X-API-Key`, 404 
 
 ## Request fields (multipart form)
 
-`video` (file, required) and `audio` (file, required unless `preview=true`) plus, all optional:
+`video` (file, required) and `audio` (file, always required — preview also uses it for its length)
+plus, all optional:
 
 | Field | Default | Values |
 |---|---|---|
@@ -120,6 +121,18 @@ Check the target box first (no model, no GPU, returns in seconds):
 ```bash
 curl -X POST http://localhost:8000/lipsync -F video=@in.mp4 -F audio=@a.wav \
      -F bbox=575,140,675,255 -F preview=true -o mask.mp4
+```
+
+## Client script
+
+`scripts/server_client.py` is a stdlib-only client (no `requests` needed) covering all of the above:
+`--health`, a blocking call, `--bg` job + polling, and `--preview`; extra pipeline settings go as
+`FIELD=VALUE` pairs, and the URL/key can come from `WILROSYNC_URL` / `WILROSYNC_KEY`:
+
+```bash
+python scripts/server_client.py http://192.168.1.103:8000 in.mp4 speech.wav \
+    --bbox 575,140,675,255 --bg -o out.mp4 --key mysecret
+python scripts/server_client.py http://192.168.1.103:8000 --health
 ```
 
 ## Colab
