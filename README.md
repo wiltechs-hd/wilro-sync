@@ -130,6 +130,21 @@ wilro-sync train --config configs/train/smoke_cpu.yaml
 Rough memory for Wan2.1-1.3B + audio adapter + LoRA at 512×512×49 frames: ~16–24 GB (estimate).
 The frozen VAE, Whisper and umT5 run only in `prepare_clips.py`, never during training.
 
+## HTTP server
+
+Serve the model over HTTP: send video + audio (+ an optional face `bbox`), get the lip-synced video back
+([docs/server.md](docs/server.md)):
+
+```bash
+pip install -e ".[server]"
+wilro-sync serve --ckpt runs/first_model/step_0054800 --host 0.0.0.0 --port 8000 --api-key mysecret
+```
+
+```bash
+curl -X POST http://localhost:8000/lipsync -F video=@in.mp4 -F audio=@speech.wav \
+     -F bbox=575,140,675,255 -F timeout=900 -o out.mp4      # or POST /jobs and poll /jobs/{id}
+```
+
 ## Evaluation
 
 ```bash
