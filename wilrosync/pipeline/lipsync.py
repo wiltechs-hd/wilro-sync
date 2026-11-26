@@ -187,7 +187,7 @@ class LipSyncPipeline:
         from ..models.backbone import T5TextEncoder, WanVAE
         from ..models.dit_lipsync import WanLipSyncTransformer
 
-        transformer = WanLipSyncTransformer.from_checkpoint(checkpoint, torch_dtype=dtype).to(device)
+        transformer = WanLipSyncTransformer.from_checkpoint(checkpoint, torch_dtype=dtype, device=device)
         repo = transformer.cfg.base_repo
         vae = WanVAE.from_pretrained(repo, torch_dtype=vae_dtype).to(device)
         def load_text():

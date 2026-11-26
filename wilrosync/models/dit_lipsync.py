@@ -92,13 +92,23 @@ class WanLipSyncTransformer(nn.Module):
         return cls(base, cfg)
 
     @classmethod
-    def from_checkpoint(cls, ckpt_dir: str, torch_dtype: torch.dtype = torch.bfloat16, base: nn.Module | None = None):
+    def from_checkpoint(cls, ckpt_dir: str, torch_dtype: torch.dtype = torch.bfloat16, base: nn.Module | None = None,
+                        device: str | torch.device | None = None):
+        """``device``: load the base weights straight onto this device (no full copy on the CPU first: on a
+        Jetson, CPU and GPU share the memory and the double peak does not fit). The result is on ``device``."""
         from safetensors.torch import load_file
 
         with open(os.path.join(ckpt_dir, CONFIG_NAME)) as f:
             cfg = LipSyncModelConfig(**json.load(f))
         if base is None:
-            model = cls.from_base(cfg, torch_dtype)
+            kw = {"device_map": str(torch.device(device))} if device is not None and \
+                torch.device(device).type != "cpu" else {}
+            try:
+                model = cls.from_base(cfg, torch_dtype, **kw)
+            except (TypeError, ValueError, NotImplementedError):  # older diffusers: no device_map for a device
+                if not kw:
+                    raise
+                model = cls.from_base(cfg, torch_dtype)
         else:
             model = cls(base, cfg)
         if cfg.lora:
@@ -116,7 +126,7 @@ class WanLipSyncTransformer(nn.Module):
         for name, p in model.named_parameters():
             if "lora_" in name:
                 p.data = p.data.to(torch_dtype)
-        return model
+        return model.to(device) if device is not None else model
 
     def save_checkpoint(self, ckpt_dir: str) -> None:
         from safetensors.torch import save_file

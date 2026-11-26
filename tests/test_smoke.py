@@ -294,3 +294,22 @@ def test_release_memory_runs():
     from wilrosync.pipeline.lipsync import release_memory
 
     release_memory()
+
+
+def test_from_checkpoint_loads_the_base_on_the_device(tmp_path, tiny_base, tiny_cfg, monkeypatch):
+    model = WanLipSyncTransformer(tiny_base, tiny_cfg)
+    model.save_checkpoint(str(tmp_path))
+    seen = []
+
+    def fake_from_base(cls, cfg, torch_dtype=torch.bfloat16, **kw):
+        seen.append(kw)
+        return cls(tiny_base, cfg)
+
+    monkeypatch.setattr(WanLipSyncTransformer, "from_base", classmethod(fake_from_base))
+    try:
+        WanLipSyncTransformer.from_checkpoint(str(tmp_path), torch_dtype=torch.float32, device="cuda")
+    except (AssertionError, RuntimeError):  # moving the result to cuda fails without a GPU
+        pass
+    assert seen and seen[-1] == {"device_map": "cuda"}
+    WanLipSyncTransformer.from_checkpoint(str(tmp_path), torch_dtype=torch.float32, device="cpu")
+    assert seen[-1] == {}  # CPU: plain loading

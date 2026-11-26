@@ -325,6 +325,7 @@ class InferenceService:
             self.pipe(ckpt)
         except Exception:
             logger.warning("checkpoint preload failed: %s", self._load_error)
+            self._free()  # whatever the failed load allocated
 
     @staticmethod
     def _free() -> None:
