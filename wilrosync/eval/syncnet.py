@@ -176,7 +176,7 @@ class S3FDDetector:
         from ..third_party.s3fd.box_utils import nms_
 
         h, w = frame.shape[:2]
-        x = torch.from_numpy(np.ascontiguousarray(frame)).permute(2, 0, 1).float()[None]  # RGB
+        x = torch.from_numpy(np.array(frame)).permute(2, 0, 1).float()[None]  # RGB
         if scale != 1:
             x = F.interpolate(x, scale_factor=scale, mode="bilinear", align_corners=False)
         x = x[0].numpy() - self.MEAN  # same preprocessing as syncnet_python (mean applied in RGB order)

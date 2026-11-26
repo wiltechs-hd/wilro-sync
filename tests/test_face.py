@@ -456,3 +456,27 @@ def test_reference_is_passed_to_the_pipeline(tmp_path):
     assert seen["ref"] is not None  # stride2 by default
     lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "rev.mp4"), reference="reverse", **kw)
     assert seen["ref"].shape == seen["frames"].shape
+
+
+def test_disk_frames_and_streaming_writer(tmp_path):
+    from wilrosync.io.media import VideoWriter, read_video, read_video_to_disk, write_video, write_wav
+
+    rng = np.random.default_rng(0)
+    frames = rng.integers(0, 255, size=(20, 48, 64, 3), dtype=np.uint8)
+    src = str(tmp_path / "src.mp4")
+    write_video(src, frames, 25.0)
+    ref, _ = read_video(src)
+    mm, fps = read_video_to_disk(src, str(tmp_path), fps=25)
+    assert fps == 25 and mm.shape == ref.shape and np.array_equal(np.asarray(mm), ref)
+    assert not mm.flags.writeable  # read-only memmap, nothing held in RAM
+
+    wav = str(tmp_path / "a.wav")
+    write_wav(wav, np.zeros(16000, np.float32))
+    out = str(tmp_path / "out.mp4")
+    with VideoWriter(out, (64, 48), 25.0, audio_path=wav) as vw:
+        for s in range(0, 20, 7):
+            vw.write(ref[s:s + 7])
+    whole = str(tmp_path / "whole.mp4")
+    write_video(whole, ref, 25.0, audio_path=wav)  # the same frames written in one go
+    back, _ = read_video(out)
+    assert back.shape == ref.shape and np.array_equal(back, read_video(whole)[0])

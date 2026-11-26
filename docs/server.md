@@ -188,3 +188,8 @@ wilro-sync serve --ckpt ~/wilro/ckpt/step_0057000 --text-embeds ~/wilro/prompt.s
 The file can also be made on another machine (it is a few MB) and copied over. After encoding, the text encoder
 can be removed from the Hugging Face cache to free about 11 GB of disk (the rest of the base model is still
 needed). `wilro-sync infer-face` takes the same `--text-embeds` option.
+
+Video memory: the source frames are decoded to a temporary file in the system temp folder (about
+width x height x 3 bytes per frame, e.g. 1.5 GB for 10 s of 1080p) and read from there, and the result is written
+in small chunks, so RAM use depends on the 512 px face crop, not on the size or length of the video. Make sure the
+temp folder (usually `/tmp`) has that much free disk.

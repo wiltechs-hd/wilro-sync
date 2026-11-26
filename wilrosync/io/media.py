@@ -98,6 +98,89 @@ def write_video(path: str, frames: np.ndarray, fps: float, audio_path: str | Non
                 raise RuntimeError(proc.stderr.decode())
 
 
+def read_video_to_disk(path: str, folder: str, fps: float | None = None) -> tuple[np.ndarray, float]:
+    """Like ``read_video`` but the frames go to a raw file in ``folder`` and come back as a read-only memmap
+    [T, H, W, 3]: random access without holding the video in RAM (the OS pages it in and out as needed)."""
+    import logging
+
+    import imageio_ffmpeg
+
+    log = logging.getLogger("imageio_ffmpeg")
+    level = log.level
+    log.setLevel(logging.ERROR)
+    try:
+        gen = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24", output_params=["-r", str(fps)] if fps else None)
+        meta = next(gen)
+    finally:
+        log.setLevel(level)
+    w, h = meta["size"]
+    fps = float(fps or meta.get("fps") or 25.0)
+    raw = os.path.join(folder, "frames.rgb")
+    t = 0
+    with open(raw, "wb") as f:
+        for buf in gen:
+            f.write(buf)
+            t += 1
+    if not t:
+        raise ValueError(f"no frames decoded from {path}")
+    return np.memmap(raw, dtype=np.uint8, mode="r", shape=(t, h, w, 3)), fps
+
+
+class VideoWriter:
+    """Write H.264 frame by frame (``write`` takes uint8 [n, H, W, 3] chunks), then mux ``audio_path`` (trimmed
+    to the video) on ``close``. Memory stays at one chunk, whatever the length of the video."""
+
+    def __init__(self, path: str, size_wh: tuple[int, int], fps: float, audio_path: str | None = None,
+                 crf: int = 17) -> None:
+        self.path, self.audio_path = path, audio_path
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        self._tmp = tempfile.TemporaryDirectory() if audio_path else None
+        self._silent = os.path.join(self._tmp.name, "video.mp4") if audio_path else path
+        w, h = size_wh
+        cmd = [_ffmpeg(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+               "-s", f"{w}x{h}", "-r", f"{fps}", "-i", "-", "-c:v", "libx264", "-crf", str(crf),
+               "-pix_fmt", "yuv420p", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", self._silent]
+        self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.frames = 0
+
+    def write(self, frames: np.ndarray) -> None:
+        self._proc.stdin.write(np.ascontiguousarray(frames, dtype=np.uint8).tobytes())
+        self.frames += len(frames)
+
+    def close(self) -> None:
+        if self._proc is None:
+            return
+        self._proc.stdin.close()
+        err = self._proc.stderr.read()
+        code = self._proc.wait()
+        self._proc = None
+        try:
+            if code:
+                raise RuntimeError(err.decode()[-2000:])
+            if self.audio_path:
+                cmd = [_ffmpeg(), "-y", "-loglevel", "error", "-i", self._silent, "-i", self.audio_path,
+                       "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", self.path]
+                proc = subprocess.run(cmd, capture_output=True)
+                if proc.returncode:
+                    raise RuntimeError(proc.stderr.decode())
+        finally:
+            if self._tmp is not None:
+                self._tmp.cleanup()
+
+    def __enter__(self) -> VideoWriter:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if exc[0] is not None and self._proc is not None:  # failed mid-way: stop ffmpeg, don't mux
+            self._proc.kill()
+            self._proc.wait()
+            self._proc = None
+            if self._tmp is not None:
+                self._tmp.cleanup()
+            return
+        self.close()
+
+
 def read_audio(path: str, sr: int = AUDIO_SR) -> np.ndarray:
     """Decode any audio/video file to mono float32 at ``sr`` Hz."""
     cmd = [_ffmpeg(), "-loglevel", "error", "-i", path, "-f", "f32le", "-acodec", "pcm_f32le",

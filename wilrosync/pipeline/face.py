@@ -18,13 +18,14 @@ Steps
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..io.media import pingpong_indices, read_audio, read_video, write_video
+from ..io.media import VideoWriter, pingpong_indices, read_audio, read_video_to_disk, write_video
 from .composite import composite
 from .lipsync import InferenceConfig, LipSyncPipeline
 from .oval import FIXED_DEFAULT, FaceLandmarker, TrackConfig, TrackedOval, lower_face_mask, track_oval
@@ -191,7 +192,7 @@ def crop_faces(frames: np.ndarray, win: FaceWindow, size: int, pad_value: float 
             x0, y0, x1, y1, ox, oy = win.box(s + j)
             if x1 > x0 and y1 > y0:
                 c[j, :, oy:oy + y1 - y0, ox:ox + x1 - x0] = torch.from_numpy(
-                    frames[s + j, y0:y1, x0:x1]).permute(2, 0, 1).float()
+                    np.array(frames[s + j, y0:y1, x0:x1])).permute(2, 0, 1).float()  # copy: frames may be read-only
         c = F.interpolate(c, size=(size, size), mode="bilinear", antialias=True, align_corners=False)
         out[s:s + n] = c.round().clamp(0, 255).byte().permute(0, 2, 3, 1).numpy()
     return out
@@ -281,8 +282,9 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
                  loop: str = "reverse", pause: int = 0, oval: str | dict = "track",
                  track: TrackConfig | dict | None = None, preview: bool = False, detector=None,
                  landmarker: FaceLandmarker | None = None, crop: str = "auto", crop_smooth: int = 9,
-                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 8, postroll: int = 12, reference: str = "stride2",
-                 blend: str = "double", raw_out: str | None = None) -> str:
+                 crop_deadzone: float = 0.15, det_every: int | None = None, preroll: int = 8, postroll: int = 12,
+                 reference: str = "stride2", blend: str = "double", raw_out: str | None = None,
+                 frames_dir: str | None = None) -> str:
     """Lip-sync ``video`` to ``audio`` through a face crop and write ``out``.
 
     mode:    "lower" (only the mouth mask is generated) or "full" (the whole crop).
@@ -307,6 +309,8 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
              mask as drawn by ``preview``.
     raw_out: also write the face crops as generated, before any blending: source crop | generated (debugging).
     preview: write the crop with the mask drawn instead of syncing (no model needed; ``pipe`` may be None).
+    frames_dir: where the decoded source frames are kept during the run (default: the system temp folder);
+             needs about width x height x 3 bytes per frame of free disk.
     cfg:     inference settings; default ``face_infer_config()`` (10 steps, 129-frame windows, hard cuts)."""
     if mode not in ("lower", "full"):
         raise ValueError("mode must be 'lower' or 'full'")
@@ -314,7 +318,23 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
         raise ValueError(f"reference must be one of {REFERENCES}")
     if blend not in ("double", "single"):
         raise ValueError("blend must be 'double' or 'single'")
-    frames, _ = read_video(video, fps=FPS)
+    # the source frames live in a temp file (memmap), not in RAM: a long 1080p+ video would otherwise need
+    # several GB for the frames and their copies (too much for 16 GB devices such as a Jetson)
+    with tempfile.TemporaryDirectory(prefix="wilrosync-frames-", dir=frames_dir) as tmp:
+        frames, _ = read_video_to_disk(video, tmp, fps=FPS)
+        try:
+            return _lipsync_face(pipe, frames, audio, out, bbox=bbox, cfg=cfg, size=size, scale=scale, mode=mode,
+                                 loop=loop, pause=pause, oval=oval, track=track, preview=preview, detector=detector,
+                                 landmarker=landmarker, crop=crop, crop_smooth=crop_smooth,
+                                 crop_deadzone=crop_deadzone, det_every=det_every, preroll=preroll,
+                                 postroll=postroll, reference=reference, blend=blend, raw_out=raw_out)
+        finally:
+            del frames
+
+
+def _lipsync_face(pipe, frames, audio, out, *, bbox, cfg, size, scale, mode, loop, pause, oval, track, preview,
+                  detector, landmarker, crop, crop_smooth, crop_deadzone, det_every, preroll, postroll, reference,
+                  blend, raw_out) -> str:
     t_src = len(frames)
     win = find_face_window(frames, bbox, scale, detector, det_every, crop, crop_smooth, deadzone=crop_deadzone)
     crops = crop_faces(frames, win, size)
@@ -385,7 +405,15 @@ def lipsync_face(pipe: LipSyncPipeline | None, video: str, audio: str | None, ou
         m = masks_for(idx[s:e], MASK_RES)
         return F.interpolate(m[:, None], size=(win.side, win.side), mode="bilinear", align_corners=False)[:, 0]
 
-    result = paste_faces(frames[idx[:len(res)]].copy(), res, win, paste_masks, feather, src_idx=idx[:len(res)])
-    write_video(out, result, FPS, audio_path=audio)
-    print(f"{len(result)} frames -> {out}")
+    # paste and write in chunks: only a few full-size frames are in memory at a time
+    n, src = len(res), idx[:len(res)]
+    h, w = frames.shape[1:3]
+    with VideoWriter(out, (w, h), FPS, audio_path=audio) as writer:
+        for s in range(0, n, 16):
+            e = min(s + 16, n)
+            part = np.array(frames[src[s:e]])  # a writable copy of these frames only
+            paste_faces(part, res[s:e], win, lambda a, b, o=s: paste_masks(o + a, o + b), feather,
+                        src_idx=src[s:e])
+            writer.write(part)
+    print(f"{n} frames -> {out}")
     return out
