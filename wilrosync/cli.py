@@ -24,7 +24,8 @@ def cmd_infer(a: argparse.Namespace) -> None:
     from .pipeline.target import TargetSignals
 
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[a.dtype]
-    pipe = LipSyncPipeline.from_pretrained(a.ckpt, device=a.device, dtype=dtype, text_device=a.text_device)
+    pipe = LipSyncPipeline.from_pretrained(a.ckpt, device=a.device, dtype=dtype, text_device=a.text_device,
+                                           text_embeds=a.text_embeds)
     frames, fps = read_video(a.video)
     wav = read_audio(a.audio)
     target = None
@@ -61,7 +62,7 @@ def cmd_infer_face(a: argparse.Namespace) -> None:
         dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[a.dtype]
         pipe = LipSyncPipeline.from_pretrained(
             a.ckpt, device=a.device, dtype=dtype, text_device=a.text_device,
-            vae_dtype=torch.bfloat16 if a.vae_bf16 else torch.float32)
+            vae_dtype=torch.bfloat16 if a.vae_bf16 else torch.float32, text_embeds=a.text_embeds)
     overrides = {k: getattr(a, k) for k in ("steps", "tau", "seed", "window", "overlap", "chain")
                  if getattr(a, k) is not None}
     if a.omega_peak is not None:
@@ -109,6 +110,16 @@ def cmd_background(a) -> None:
                        feather=a.feather, invert=a.invert, blur=a.blur, save_mask=a.save_mask)
 
 
+def cmd_encode_prompt(a) -> None:
+    import torch
+
+    from .pipeline.lipsync import DEFAULT_PROMPT, encode_prompt_file
+
+    dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[a.dtype]
+    out = encode_prompt_file(a.ckpt, a.out, a.prompt or DEFAULT_PROMPT, device=a.device, dtype=dtype)
+    print(f"prompt embedding -> {out} (use with --text-embeds)")
+
+
 def cmd_serve(a) -> None:
     try:
         import uvicorn
@@ -118,7 +129,7 @@ def cmd_serve(a) -> None:
         raise SystemExit("pip install -e \".[server]\"  (fastapi + uvicorn + python-multipart)") from None
 
     cfg = ServerConfig(ckpt=a.ckpt, device=a.device, dtype=a.dtype, vae_bf16=a.vae_bf16,
-                       text_device=a.text_device, api_key=a.api_key, max_queue=a.max_queue,
+                       text_device=a.text_device, text_embeds=a.text_embeds, api_key=a.api_key, max_queue=a.max_queue,
                        ckpt_root=a.ckpt_root, keep_minutes=a.keep_minutes, cors=a.cors)
     uvicorn.run(create_app(cfg), host=a.host, port=a.port, workers=1, log_level="info")
 
@@ -156,6 +167,8 @@ def main(argv: list[str] | None = None) -> None:
     i.add_argument("--no-region-lock", action="store_true")
     i.add_argument("--device", default="cuda")
     i.add_argument("--text-device", default=None, help="e.g. cpu to keep umT5 off the GPU")
+    i.add_argument("--text-embeds", default=None,
+                    help="saved prompt embedding from `wilro-sync encode-prompt`: never loads the 11 GB text encoder")
     i.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     i.set_defaults(func=cmd_infer)
 
@@ -210,6 +223,8 @@ def main(argv: list[str] | None = None) -> None:
     fz.add_argument("--profile", action="store_true", help="print per-stage timings")
     fz.add_argument("--device", default="cuda")
     fz.add_argument("--text-device", default=None)
+    fz.add_argument("--text-embeds", default=None,
+                    help="saved prompt embedding from `wilro-sync encode-prompt`: never loads the 11 GB text encoder")
     fz.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     fz.set_defaults(func=cmd_infer_face)
 
@@ -239,6 +254,15 @@ def main(argv: list[str] | None = None) -> None:
     bgp.add_argument("--save-mask", default=None, help="also write the mask used as a grey video")
     bgp.set_defaults(func=cmd_background)
 
+    ep = sub.add_parser("encode-prompt", help="encode the prompt once and save it (for --text-embeds; loads only "
+                        "the text encoder, so run it while nothing else uses the memory)")
+    ep.add_argument("--ckpt", required=True, help="checkpoint dir (its base model's text encoder is used)")
+    ep.add_argument("--out", required=True, help="output .safetensors file")
+    ep.add_argument("--prompt", default=None, help="default: the prompt used in training")
+    ep.add_argument("--device", default="cpu", help="cpu (default) or cuda")
+    ep.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
+    ep.set_defaults(func=cmd_encode_prompt)
+
     srv = sub.add_parser("serve", help="serve lip-sync inference over HTTP (docs/server.md)")
     srv.add_argument("--ckpt", required=True,
                      help="checkpoint directory (a step_* dir, or a runs/ dir: uses its newest)")
@@ -246,6 +270,8 @@ def main(argv: list[str] | None = None) -> None:
     srv.add_argument("--port", type=int, default=8000)
     srv.add_argument("--device", default=None, help="default: cuda when available, else cpu")
     srv.add_argument("--text-device", default=None, help="e.g. cpu to keep umT5 off the GPU")
+    srv.add_argument("--text-embeds", default=None,
+                    help="saved prompt embedding from `wilro-sync encode-prompt`: never loads the 11 GB text encoder")
     srv.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     srv.add_argument("--vae-bf16", action="store_true", help="bf16 VAE: faster, tiny colour/detail change")
     srv.add_argument("--api-key", default=None, help="require the X-API-Key header with this value")

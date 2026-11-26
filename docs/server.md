@@ -39,7 +39,8 @@ Errors are JSON `{"detail": ...}`: 400 bad field/file, 401 bad `X-API-Key`, 404 
 
 ## Request fields (multipart form)
 
-`video` (file, required) and `audio` (file, required unless `preview=true`) plus, all optional:
+`video` (file, required) and `audio` (file, always required — preview also uses it for its length)
+plus, all optional:
 
 | Field | Default | Values |
 |---|---|---|
@@ -122,6 +123,18 @@ curl -X POST http://localhost:8000/lipsync -F video=@in.mp4 -F audio=@a.wav \
      -F bbox=575,140,675,255 -F preview=true -o mask.mp4
 ```
 
+## Client script
+
+`scripts/server_client.py` is a stdlib-only client (no `requests` needed) covering all of the above:
+`--health`, a blocking call, `--bg` job + polling, and `--preview`; extra pipeline settings go as
+`FIELD=VALUE` pairs, and the URL/key can come from `WILROSYNC_URL` / `WILROSYNC_KEY`:
+
+```bash
+python scripts/server_client.py http://192.168.1.103:8000 in.mp4 speech.wav \
+    --bbox 575,140,675,255 --bg -o out.mp4 --key mysecret
+python scripts/server_client.py http://192.168.1.103:8000 --health
+```
+
 ## Colab
 
 ```python
@@ -158,3 +171,20 @@ Proxies time long connections out, so prefer `POST /jobs` + `GET /jobs/{id}` ove
 - Security: bind to 127.0.0.1 and put a proxy in front, or set `--api-key`; there is no HTTPS. `--cors`
   allows browser apps to call the API directly. Treat uploads as untrusted input: the server only
   writes them to temp files and hands them to ffmpeg/imageio.
+
+## Small-memory devices (Jetson)
+
+The text encoder (umT5, about 11 GB) is only used to encode the prompt, which never changes. On a device where
+CPU and GPU share 16 GB or less (e.g. Jetson Orin NX), loading it next to the model runs out of memory. Encode
+the prompt once while nothing else is running, then start the server with the saved file; the text encoder is
+then never loaded (requests with a different `prompt` get a 400):
+
+```bash
+wilro-sync encode-prompt --ckpt ~/wilro/ckpt/step_0057000 --out ~/wilro/prompt.safetensors    # once, on the CPU
+wilro-sync serve --ckpt ~/wilro/ckpt/step_0057000 --text-embeds ~/wilro/prompt.safetensors \
+    --host 0.0.0.0 --port 8000 --api-key <key> --vae-bf16
+```
+
+The file can also be made on another machine (it is a few MB) and copied over. After encoding, the text encoder
+can be removed from the Hugging Face cache to free about 11 GB of disk (the rest of the base model is still
+needed). `wilro-sync infer-face` takes the same `--text-embeds` option.

@@ -237,6 +237,7 @@ class ServerConfig:
     dtype: str = "bf16"                # model dtype: bf16 | fp16 | fp32
     vae_bf16: bool = False
     text_device: str | None = None     # e.g. cpu to keep the 11 GB umT5 off the GPU
+    text_embeds: str | None = None     # saved prompt embedding: never load umT5 (Jetson)
     api_key: str | None = None         # when set, requests need the X-API-Key header
     max_queue: int = 8                 # jobs waiting (the GPU runs one at a time)
     ckpt_root: str | None = None       # allow per-request `ckpt` inside this dir
@@ -434,7 +435,7 @@ def _default_load_pipe(ckpt: str, config: ServerConfig):
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[config.dtype]
     device = config.device or ("cuda" if torch.cuda.is_available() else "cpu")
     return LipSyncPipeline.from_pretrained(
-        ckpt, device=device, dtype=dtype, text_device=config.text_device,
+        ckpt, device=device, dtype=dtype, text_device=config.text_device, text_embeds=config.text_embeds,
         vae_dtype=torch.bfloat16 if config.vae_bf16 else torch.float32)
 
 

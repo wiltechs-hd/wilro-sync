@@ -78,6 +78,24 @@ def processing_size(h: int, w: int, max_side: int, multiple: int) -> tuple[int, 
     return ph, pw
 
 
+def encode_prompt_file(checkpoint: str, out: str, prompt: str = DEFAULT_PROMPT, device: str = "cpu",
+                       dtype: torch.dtype = torch.bfloat16) -> str:
+    """Encode ``prompt`` with the checkpoint's umT5 once and save it for ``text_embeds=`` (loads only umT5)."""
+    import json
+    import os
+
+    from ..models.backbone import T5TextEncoder
+    from ..models.dit_lipsync import CONFIG_NAME
+
+    with open(os.path.join(checkpoint, CONFIG_NAME)) as f:
+        repo = json.load(f)["base_repo"]
+    enc = T5TextEncoder.from_pretrained(repo, torch_dtype=dtype, device=device)
+    with torch.no_grad():
+        emb = enc([prompt])
+    LipSyncPipeline.save_prompt_embeds(out, prompt, emb)
+    return out
+
+
 def _to_tensor(frames: np.ndarray) -> torch.Tensor:
     """uint8 [T, H, W, 3] -> float [T, 3, H, W] in [-1, 1]."""
     return torch.from_numpy(np.ascontiguousarray(frames)).permute(0, 3, 1, 2).float() / 127.5 - 1.0
@@ -133,9 +151,12 @@ class LipSyncPipeline:
     @classmethod
     def from_pretrained(cls, checkpoint: str, device: str = "cuda", dtype: torch.dtype = torch.bfloat16,
                         vae_dtype: torch.dtype = torch.float32, text_device: str | None = None,
-                        keep_text_encoder: bool = False, merge_lora: bool = True) -> LipSyncPipeline:
+                        keep_text_encoder: bool = False, merge_lora: bool = True,
+                        text_embeds: str | None = None) -> LipSyncPipeline:
         """``keep_text_encoder=False`` loads umT5 (~11 GB) only to encode the prompt, then frees it.
-        ``merge_lora`` folds LoRA adapters into the weights for inference (same output, faster)."""
+        ``merge_lora`` folds LoRA adapters into the weights for inference (same output, faster).
+        ``text_embeds``: a file from ``wilro-sync encode-prompt``; its prompt is used without ever loading umT5
+        (small-memory devices such as a Jetson), and other prompts are refused."""
         from ..models.audio import WhisperAudioEncoder
         from ..models.backbone import T5TextEncoder, WanVAE
         from ..models.dit_lipsync import WanLipSyncTransformer
@@ -153,10 +174,36 @@ class LipSyncPipeline:
             pipe = cls(transformer, vae, None, audio, device, dtype, text_loader=load_text)
         if merge_lora:
             pipe.merge_lora()
+        if text_embeds:
+            pipe.load_prompt_embeds(text_embeds)
+            if not keep_text_encoder:
+                pipe._text_loader = None  # never load umT5 (it is what does not fit)
         return pipe
+
+    def load_prompt_embeds(self, path: str) -> str:
+        """Add a saved prompt embedding (``save_prompt_embeds``) to the cache; returns its prompt."""
+        from safetensors import safe_open
+
+        with safe_open(path, framework="pt") as f:
+            prompt = (f.metadata() or {}).get("prompt")
+            emb = f.get_tensor("text")
+        if not prompt:
+            raise ValueError(f"{path} has no prompt in its metadata (make it with `wilro-sync encode-prompt`)")
+        self._text_cache[prompt] = emb
+        return prompt
+
+    @staticmethod
+    def save_prompt_embeds(path: str, prompt: str, emb: torch.Tensor) -> None:
+        from safetensors.torch import save_file
+
+        save_file({"text": emb.detach().cpu().contiguous()}, path, metadata={"prompt": prompt})
 
     def encode_prompt(self, prompt: str) -> torch.Tensor:
         if prompt not in self._text_cache:
+            if self.text_encoder is None and self._text_loader is None:
+                raise ValueError(f"prompt {prompt!r} is not in the saved prompt embeddings and the text encoder is "
+                                 "disabled; use the saved prompt or make a file for this one with "
+                                 "`wilro-sync encode-prompt --prompt ...`")
             enc = self.text_encoder if self.text_encoder is not None else self._text_loader()
             self._text_cache[prompt] = enc([prompt]).detach().cpu()
             if self.text_encoder is None:  # loaded on demand -> free it again
