@@ -28,6 +28,7 @@ WILROSYNC_URL / WILROSYNC_KEY environment variables.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import mimetypes
 import os
@@ -102,10 +103,25 @@ def detail(status: int, body: bytes) -> str:
         return body.decode("utf-8", "replace")[:400]
 
 
-def poll_job(base: str, key: str | None, job_id: str, interval: float, deadline: float | None) -> dict:
+NET_ERRORS = (OSError, http.client.HTTPException)  # URLError/RemoteDisconnected/reset/timeout
+
+
+def poll_job(base: str, key: str | None, job_id: str, interval: float, deadline: float | None,
+             max_streak: int = 10) -> dict:
+    """Poll one job, riding out transient connection drops (server restart, flaky network)."""
     url = f"{base}/jobs/{job_id}"
+    misses = 0
     while True:
-        status, body = get(url, key)
+        try:
+            status, body = get(url, key)
+        except NET_ERRORS as e:
+            misses += 1
+            if misses > max_streak:
+                raise ServerError(503, f"lost the server while polling {job_id}: {e}") from e
+            print(f"  network hiccup {misses}/{max_streak}: {e}", file=sys.stderr)
+            time.sleep(max(interval, 5.0))
+            continue
+        misses = 0
         if status != 200:
             raise ServerError(status, detail(status, body))
         state = json.loads(body)
@@ -118,12 +134,23 @@ def poll_job(base: str, key: str | None, job_id: str, interval: float, deadline:
         time.sleep(interval)
 
 
-def fetch_result(base: str, key: str | None, job_id: str, out: Path, timeout: int) -> None:
-    status, body = get(f"{base}/jobs/{job_id}/result", key, timeout=timeout)
-    if status != 200:
-        raise ServerError(status, detail(status, body))
-    out.write_bytes(body)
-    print(f"saved {out} ({len(body)} bytes)")
+def fetch_result(base: str, key: str | None, job_id: str, out: Path, timeout: int,
+                 attempts: int = 3) -> None:
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            status, body = get(f"{base}/jobs/{job_id}/result", key, timeout=timeout)
+        except NET_ERRORS as e:  # a 410 on retry means the blob left with the failed transfer
+            last = e
+            print(f"  download hiccup {attempt}/{attempts}: {e}", file=sys.stderr)
+            time.sleep(5)
+            continue
+        if status != 200:
+            raise ServerError(status, detail(status, body))
+        out.write_bytes(body)
+        print(f"saved {out} ({len(body)} bytes)")
+        return
+    raise ServerError(503, f"could not download result of {job_id}: {last}")
 
 
 def main() -> int:
@@ -139,7 +166,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=0, help="blocking call: seconds to wait before the "
                                                            "server returns 202 (0 = wait forever)")
     ap.add_argument("--poll-interval", type=float, default=3.0)
-    ap.add_argument("--give-up", type=float, default=3600, help="client-side wait limit in seconds")
+    ap.add_argument("--give-up", type=float, default=14400, help="client-side wait limit in seconds "
+                                                                 "(default 4h: long GPU jobs)")
     ap.add_argument("-o", "--out", default="out.mp4")
     ap.add_argument("--key", default=os.environ.get("WILROSYNC_KEY"), help="X-API-Key (or WILROSYNC_KEY)")
     ap.add_argument("--health", action="store_true", help="just show /health and exit")
@@ -182,7 +210,12 @@ def main() -> int:
         fields.append((name, None, value.encode(), None))
 
     def run_bg(endpoint: str) -> int:
-        status, body = call(f"{base}{endpoint}", args.key, fields, timeout=120)
+        try:
+            status, body = call(f"{base}{endpoint}", args.key, fields, timeout=120)
+        except NET_ERRORS as e:
+            # never auto-retry a submit: the job may exist server-side; check /jobs first
+            raise ServerError(503, f"could not reach the server to submit: {e} "
+                                   f"(check GET {base}/jobs before resubmitting)") from e
         if status not in (200, 202):
             raise ServerError(status, detail(status, body))
         job = json.loads(body)
