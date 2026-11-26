@@ -329,9 +329,9 @@ class InferenceService:
     @staticmethod
     def _free() -> None:
         try:
-            import torch
+            from .pipeline.lipsync import release_memory
 
-            torch.cuda.empty_cache()
+            release_memory()  # cached GPU memory and freed CPU heap back to the system after each job
         except Exception:
             pass
 

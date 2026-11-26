@@ -193,3 +193,8 @@ Video memory: the source frames are decoded to a temporary file in the system te
 width x height x 3 bytes per frame, e.g. 1.5 GB for 10 s of 1080p) and read from there, and the result is written
 in small chunks, so RAM use depends on the 512 px face crop, not on the size or length of the video. Make sure the
 temp folder (usually `/tmp`) has that much free disk.
+
+GPUs with less than 24 GB (and the shared memory of a Jetson) automatically run the with- and without-audio
+guidance passes one after the other instead of as a batch of 2 (`InferenceConfig.cfg_sequential`): about half the
+transformer's working memory, a little slower, same result. After loading and after every job the server hands
+freed memory back to the system (on a Jetson the CPU heap left over from loading is otherwise 3-4 GB).

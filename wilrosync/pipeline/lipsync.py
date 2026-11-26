@@ -60,6 +60,9 @@ class InferenceConfig:
     skip_uncond: bool = True
     cfg_stop_sigma: float = 0.0  # also drop it below this noise level (approximate; 0 = only where exact)
     profile: bool = False  # collect per-stage timings in LipSyncPipeline.timings
+    # run the with- and without-audio passes one after the other instead of as a batch of 2: about half the
+    # transformer's working memory, a little slower. None = automatic (on when the GPU has < 24 GB, e.g. a Jetson)
+    cfg_sequential: bool | None = None
 
 
 def load_infer_config(path: str | None = None) -> InferenceConfig:
@@ -76,6 +79,29 @@ def processing_size(h: int, w: int, max_side: int, multiple: int) -> tuple[int, 
     ph = max(multiple, int(round(h * scale / multiple)) * multiple)
     pw = max(multiple, int(round(w * scale / multiple)) * multiple)
     return ph, pw
+
+
+def _small_gpu(device) -> bool:
+    """True for GPUs with less than 24 GB (shared memory on a Jetson counts as the GPU's)."""
+    dev = torch.device(device)
+    if dev.type != "cuda" or not torch.cuda.is_available():
+        return False
+    return torch.cuda.get_device_properties(dev).total_memory < 24 * 2**30
+
+
+def release_memory() -> None:
+    """Free cached GPU memory and give freed CPU heap back to the system (glibc keeps it otherwise; on a Jetson,
+    where CPU and GPU share the memory, that held-back heap is what runs the GPU out of memory)."""
+    import ctypes
+    import gc
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # not glibc (macOS, Windows, musl)
+        pass
 
 
 def encode_prompt_file(checkpoint: str, out: str, prompt: str = DEFAULT_PROMPT, device: str = "cpu",
@@ -178,6 +204,7 @@ class LipSyncPipeline:
             pipe.load_prompt_embeds(text_embeds)
             if not keep_text_encoder:
                 pipe._text_loader = None  # never load umT5 (it is what does not fit)
+        release_memory()  # the weights were built on the CPU first; hand that memory back (3-4 GB)
         return pipe
 
     def load_prompt_embeds(self, path: str) -> str:
@@ -231,15 +258,23 @@ class LipSyncPipeline:
         lock = None
         if (cfg.region_lock and not full_frame) or force_lock:  # force: chained context, also in full-frame mode
             lock = RegionLock(z_src, noise, mask_lat.to(dev), cfg.release_steps, cfg.release_dilate)
-        text2 = torch.cat([text, text])
-        zc2 = torch.cat([z_cond, z_cond])
-        audio2 = torch.cat([audio_tokens, null_tokens])
+        sequential = cfg.cfg_sequential if cfg.cfg_sequential is not None else _small_gpu(dev)
+        text2 = None if sequential else torch.cat([text, text])
+        zc2 = None if sequential else torch.cat([z_cond, z_cond])
+        audio2 = None if sequential else torch.cat([audio_tokens, null_tokens])
         d = cfg.dscfg
         for i in range(cfg.steps):
             s, s1 = sigmas[i], sigmas[i + 1]
             if self._cond_only(s, cfg, lock is not None):
                 t = sigma_to_timestep(s).to(dev).expand(1)
                 v = self.transformer(x, z_cond, t, text, audio_tokens).float()
+            elif sequential:
+                t = sigma_to_timestep(s).to(dev).expand(1)
+                v_c = self.transformer(x, z_cond, t, text, audio_tokens).float()
+                v_u = self.transformer(x, z_cond, t, text, null_tokens).float()
+                scale = guidance_scale_map(s, g_map, tmask, d, cfg.tau)
+                v = apply_guidance(v_u, v_c, scale)
+                del v_c, v_u
             else:
                 t = sigma_to_timestep(s).to(dev).expand(2)
                 v_c, v_u = self.transformer(torch.cat([x, x]), zc2, t, text2, audio2).chunk(2)

@@ -268,3 +268,29 @@ def test_saved_prompt_embeds(tmp_path, tiny_base, tiny_cfg):
     assert _FakeT5.calls == [("some/repo", "cpu")]
     pipe2 = LipSyncPipeline(model, None, None, None, device="cpu", dtype=torch.float32)
     assert pipe2.load_prompt_embeds(out) == "hi"
+
+
+def test_sequential_guidance_matches_batched(tiny_base, tiny_cfg):
+    model = WanLipSyncTransformer(tiny_base, tiny_cfg).eval()
+    with torch.no_grad():  # make the audio path non-trivial so guidance matters
+        for m in model.audio_attn:
+            m.to_out.weight.normal_(std=0.05)
+    pipe = LipSyncPipeline(model, _tiny_vae(), _Text(), _Audio(), device="cpu", dtype=torch.float32)
+    rng = np.random.default_rng(4)
+    t, h, w = 9, 32, 32
+    frames = rng.integers(0, 255, size=(t, h, w, 3), dtype=np.uint8)
+    wav = rng.standard_normal(int(16000 * t / 25)).astype(np.float32) * 0.1
+    target = TargetSignals.from_bbox(t, h, w, (4, 4, 28, 28))
+    outs = []
+    for seq in (False, True):
+        torch.manual_seed(0)
+        cfg = InferenceConfig(steps=3, window=9, overlap=0, max_side=32, loop_video=False, cfg_sequential=seq,
+                              skip_uncond=False, dscfg=DSCFGConfig(omega_peak=3.0))
+        outs.append(pipe(frames, 25.0, wav, target=target, cfg=cfg, progress=False).astype(int))
+    assert np.abs(outs[0] - outs[1]).max() <= 1  # same result, one pass at a time
+
+
+def test_release_memory_runs():
+    from wilrosync.pipeline.lipsync import release_memory
+
+    release_memory()
