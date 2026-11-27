@@ -271,3 +271,71 @@ def test_health_and_info(client):
     assert h["status"] == "ok" and "model_loaded" in h and "jobs" in h
     info = client.get("/").json()
     assert info["defaults"]["steps"] == 10 and "bbox" in info["fields"]
+
+
+# ----------------------------------------------------------------------------- episode jobs
+def _png_bytes() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), (200, 120, 90)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _episode_files(tmp_path, mp4, names=("alice", "bob"), audio=True):
+    files = {"video": ("episode.mp4", mp4, "video/mp4")}
+    for n in names:
+        files[f"face.{n}"] = (f"{n}.jpg", _png_bytes(), "image/jpeg")
+        files[f"voice.{n}"] = (f"{n}.wav", b"RIFF-fake-voice", "audio/wav")
+    if audio:
+        files["audio"] = ("soundtrack.wav", b"RIFF-fake-mix", "audio/wav")
+    return files
+
+
+def test_episode_job_roundtrip(client, calls, tmp_path, monkeypatch):
+
+    seen = {}
+
+    def fake_episode(pipe, video, characters, out, audio=None, *, silent="keep", min_face=80,
+                     match_threshold=None, shot_threshold=27.0, **face_kw):
+        seen.update(pipe=pipe, video=video, characters=[c.name for c in characters],
+                    audio=audio, silent=silent, min_face=min_face, match=match_threshold,
+                    shot_threshold=shot_threshold, face_kw=face_kw)
+        shutil.copyfile(video, out)
+        return [{"index": 0, "start": 0, "end": 4, "faces": 2, "matched": {}, "note": ""}]
+
+    monkeypatch.setattr("wilrosync.pipeline.episode.lipsync_episode", fake_episode)
+    r = client.post("/jobs", files=_episode_files(tmp_path, _mp4_bytes(tmp_path)),
+                    data={"silent": "close", "min_face": "60", "match": "0.4", "steps": "12"})
+    assert r.status_code == 200, r.text
+    jid = r.json()["job_id"]
+    s = _wait_status(client, jid)
+    assert s["status"] == "done" and s["kind"] == "episode"
+    assert s["characters"] == ["alice", "bob"]
+    assert s["report"][0]["end"] == 4
+    assert seen["audio"] and seen["silent"] == "close" and seen["min_face"] == 60
+    assert seen["match"] == 0.4 and seen["shot_threshold"] == 27.0
+    assert "loop" not in seen["face_kw"] and seen["face_kw"]["mode"] == "lower"  # loop pinned by episode
+    got = client.get(f"/jobs/{jid}/result")
+    assert got.status_code == 200 and "episode" in got.headers["content-disposition"]
+
+
+def test_episode_validation(client, tmp_path):
+    mp4 = _mp4_bytes(tmp_path)
+    png = _png_bytes()
+    # a face without its voice -> 400 (paired files only count as episode mode when complete)
+    r = client.post("/jobs", files={"video": ("e.mp4", mp4, "video/mp4"),
+                                    "face.alice": ("a.jpg", png, "image/jpeg"),
+                                    "audio": ("m.wav", b"RIFF", "audio/wav")})
+    assert r.status_code == 400 and "face.<name>" in r.json()["detail"]
+    # bbox is meaningless in episode mode -> 400
+    r = client.post("/jobs", files=_episode_files(tmp_path, mp4, audio=False), data={"bbox": "1,2,3,4"})
+    assert r.status_code == 400 and "bbox" in r.json()["detail"]
+    # silent must be keep|close
+    r = client.post("/jobs", files=_episode_files(tmp_path, mp4, audio=False), data={"silent": "shout"})
+    assert r.status_code == 400 and "silent" in r.json()["detail"]
+    # no characters at all: the old lipsync path still needs its audio
+    r = client.post("/jobs", files={"video": ("c.mp4", mp4, "video/mp4")})
+    assert r.status_code == 400 and "audio" in r.json()["detail"]

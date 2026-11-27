@@ -161,6 +161,9 @@ def main() -> int:
     ap.add_argument("audio", nargs="?", help="audio track (wav/mp3); required unless --preview … the "
                                             "server still wants a short file for its length")
     ap.add_argument("--bbox", help="x0,y0,x1,y1 in first-frame pixels (the face to sync)")
+    ap.add_argument("--character", action="append", default=[], metavar="NAME=FACE.jpg:VOICE.wav",
+                    help="episode mode, once per character: reference photo + their episode-length "
+                         "voice track (silence where they do not speak)")
     ap.add_argument("--preview", action="store_true", help="crop+mask only, no model (seconds)")
     ap.add_argument("--bg", action="store_true", help="POST /jobs and poll instead of a blocking call")
     ap.add_argument("--timeout", type=int, default=0, help="blocking call: seconds to wait before the "
@@ -199,6 +202,19 @@ def main() -> int:
     if args.audio:
         audio_path = Path(args.audio)
         fields.append(("audio", audio_path.name, audio_path.read_bytes(), None))
+    if args.character:  # episode mode: one reference photo + voice track per character
+
+        for spec in args.character:
+            try:
+                name, rest = spec.split("=", 1)
+                face, voice = rest.rsplit(":", 1)
+            except ValueError:
+                ap.error(f"--character must look like NAME=face.jpg:voice.wav, got {spec!r}")
+            name = name.strip()
+            if not (name and face.strip() and voice.strip()):
+                ap.error(f"--character must look like NAME=face.jpg:voice.wav, got {spec!r}")
+            fields.append((f"face.{name}", Path(face.strip()).name, Path(face.strip()).read_bytes(), None))
+            fields.append((f"voice.{name}", Path(voice.strip()).name, Path(voice.strip()).read_bytes(), None))
     for name, value in (("--bbox", args.bbox), ("--preview", "true" if args.preview else None),
                         ("--timeout", str(args.timeout) if args.timeout else None)):
         if value is not None:
@@ -227,6 +243,11 @@ def main() -> int:
             return 1
         if state.get("inference_seconds"):
             print(f"inference: {state['inference_seconds']:.1f}s", file=sys.stderr)
+        if state.get("report"):  # episode jobs: per-shot who-was-synced summary
+            for shot in state["report"]:
+                m = ", ".join(f"{n} {v['action']}({v['similarity']})"
+                              for n, v in shot.get("matched", {}).items()) or "none"
+                print(f"  shot {shot['index']} [{shot['start']}:{shot['end']}]: {m}", file=sys.stderr)
         fetch_result(base, args.key, job["job_id"], Path(args.out), timeout=600)
         return 0
 

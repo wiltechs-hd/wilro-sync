@@ -73,6 +73,34 @@ The defaults are the notebook's tuned `BASE` (`steps=10, window=129, overlap=2, 
 loop=reverse, crop=auto, preroll=4, postroll=8, reference=stride2, blend=double, oval=track` with
 `track = width 1.8, bottom 0.2, top 0.1, spread 0.2`, `omega_peak 4.5, gamma 1.5`).
 
+## Episode mode (several characters)
+
+Upload `face.<name>` (reference photo) and `voice.<name>` (their own track, as long as the episode,
+silence where they do not speak) file fields and the job becomes an **episode**: the server splits
+the video at the cuts, matches every face to the characters (YuNet + SFace), and lip-syncs every
+matched character who speaks, one pass per face — see `docs/episode.md` for how it works. The
+`audio` file becomes the final soundtrack (optional; without it the voice tracks are summed), `bbox`
+and `preview` do not apply, and episode-only fields are:
+
+| Field | Default | Values |
+|---|---|---|
+| `silent` | keep | a matched character who does not speak: `keep` as filmed, or `close` (sync to silence) |
+| `min_face` | 80 | faces smaller than this (px) are left alone |
+| `match` | 0.363 | SFace cosine similarity needed to accept a face as a character |
+| `shot_threshold` | 27 | PySceneDetect cut sensitivity |
+
+`GET /jobs/{id}` of a done episode job carries `kind: "episode"`, `characters` and the per-shot
+`report` (who was matched where, with what similarity, `sync`/`keep`/`close`). At most 8 characters.
+
+```bash
+curl -X POST http://localhost:8000/jobs -H "X-API-Key: mysecret" \
+  -F video=@episode.mp4 \
+  -F face.alice=@alice.jpg -F voice.alice=@alice_track.wav \
+  -F face.bob=@bob.jpg   -F voice.bob=@bob_track.wav \
+  -F audio=@soundtrack.wav -F silent=close
+# then poll GET /jobs/{id}; GET /jobs/{id}/result returns episode_synced.mp4
+```
+
 ## Examples
 
 Sync (simplest; hold the connection until the video is ready):
@@ -133,6 +161,11 @@ curl -X POST http://localhost:8000/lipsync -F video=@in.mp4 -F audio=@a.wav \
 python scripts/server_client.py http://192.168.1.103:8000 in.mp4 speech.wav \
     --bbox 575,140,675,255 --bg -o out.mp4 --key mysecret
 python scripts/server_client.py http://192.168.1.103:8000 --health
+
+# episode mode (same character syntax as `wilro-sync episode`; prints the per-shot report)
+python scripts/server_client.py http://192.168.1.103:8000 episode.mp4 \
+    --character alice=alice.jpg:alice_track.wav --character bob=bob.jpg:bob_track.wav \
+    --audio soundtrack.wav --bg -o episode_synced.mp4
 ```
 
 ## Colab

@@ -179,9 +179,13 @@ def count_frames(video: str) -> int:
 
 
 def extract_shot(video: str, start: int, end: int, out: str) -> str:
-    """Frames [start, end) at 25 fps as their own video (no audio, near-lossless)."""
-    _run("-i", video, "-vf", f"fps={FPS},trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS",
-         "-an", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", out)
+    """Frames [start, end) at 25 fps as their own video (no audio, near-lossless).
+
+    Trims on the input side by time and forces CFR on output: a ``trim``/``select`` filter chain
+    rounds the last frame's duration away and each shot would come out one frame short."""
+    _run("-ss", f"{start / FPS:.6f}", "-i", video, "-t", f"{(end - start) / FPS:.6f}",
+         "-an", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-r", str(FPS),
+         "-fps_mode", "cfr", out)
     return out
 
 

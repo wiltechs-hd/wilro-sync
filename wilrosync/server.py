@@ -57,6 +57,7 @@ SERVE_DEFAULTS: dict = {
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
 AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 class QueueFull(Exception):
@@ -222,11 +223,20 @@ def parse_params(data: Mapping) -> dict:
     return out
 
 
+def parse_episode(data: Mapping) -> dict:
+    """Validate the episode-only request fields (silent / min_face / match / shot_threshold)."""
+    out: dict = {"silent": _as_choice(data, "silent", ("keep", "close"), "keep")}
+    out["min_face"] = _as_int(data, "min_face", 0, 4096, 80)
+    out["match"] = _as_float(data, "match", 0.0, 1.0, None)
+    out["shot_threshold"] = _as_float(data, "shot_threshold", 1.0, 100.0, 27.0)
+    return out
+
+
 ALLOWED_FIELDS = frozenset(
     ("video", "audio", "bbox", "preview", "ckpt", "timeout", "prompt", "steps", "tau", "window",
      "overlap", "chain", "same_noise", "seed", "omega_peak", "gamma", "mode", "loop", "pause", "crop",
      "crop_smooth", "crop_deadzone", "det_every", "preroll", "postroll", "reference", "blend", "oval",
-     "track", "size", "scale"))
+     "track", "size", "scale", "silent", "min_face", "match", "shot_threshold"))
 
 
 # ------------------------------------------------------------------------------- service
@@ -254,6 +264,7 @@ class Job:
         self.error: str | None = None
         self.client_error = False
         self.out: Path | None = None
+        self.report: list | None = None     # episode jobs: the per-shot report
         self.delivered = False  # the video has been sent once; /result then says 410 Gone
         self.created = time.time()
         self.started: float | None = None
@@ -366,10 +377,22 @@ class InferenceService:
         p = job.params
         job.status, job.started = "running", time.time()
         try:
-            pipe = None if p["preview"] else self.pipe(self.resolve_ckpt(p["ckpt"]))
             started = time.time()
-            out = self.infer_fn(pipe, p["video_path"], p["audio_path"], str(job.tmpdir / "out.mp4"),
-                                bbox=p["bbox"], cfg=face_infer_config(**p["cfg"]), **p["face"])
+            if p["kind"] == "episode":
+                from .pipeline.episode import Character, lipsync_episode
+
+                chars = [Character(n, p[f"face_{n}"], p[f"voice_{n}"]) for n in p["characters"]]
+                job.report = lipsync_episode(
+                    self.pipe(self.resolve_ckpt(p["ckpt"])), p["video_path"], chars,
+                    str(job.tmpdir / "out.mp4"), audio=p["audio_path"], silent=p["silent"],
+                    min_face=p["min_face"], match_threshold=p["match"],
+                    shot_threshold=p["shot_threshold"], cfg=face_infer_config(**p["cfg"]),
+                    **{k: v for k, v in p["face"].items() if k != "loop"})  # episode pins loop="trim"
+                out = job.tmpdir / "out.mp4"
+            else:
+                pipe = None if p["preview"] else self.pipe(self.resolve_ckpt(p["ckpt"]))
+                out = self.infer_fn(pipe, p["video_path"], p["audio_path"], str(job.tmpdir / "out.mp4"),
+                                    bbox=p["bbox"], cfg=face_infer_config(**p["cfg"]), **p["face"])
             job.out, job.seconds = Path(out), time.time() - started
             job.status = "done"
             logger.info("job %s done in %.1fs -> %s", job.id, job.seconds, out)
@@ -380,7 +403,7 @@ class InferenceService:
         finally:
             job.finished = time.time()
             job.event.set()
-            for key in ("video_path", "audio_path"):  # the uploads are no longer needed
+            for key in [k for k in p if k.startswith(("video_", "audio_", "face_", "voice_"))]:
                 if p.get(key):
                     try:
                         Path(p[key]).unlink(missing_ok=True)
@@ -444,7 +467,8 @@ def _default_load_pipe(ckpt: str, config: ServerConfig):
 async def save_upload(f, dest: Path, what: str, max_mb: int) -> Path:
     """Write an uploaded file to ``dest``, keeping its extension; returns the path written."""
     suffix = Path(f.filename or "").suffix.lower()
-    allowed = AUDIO_SUFFIXES if what == "audio" else VIDEO_SUFFIXES
+    allowed = {"audio": AUDIO_SUFFIXES, "face": IMAGE_SUFFIXES, "voice": AUDIO_SUFFIXES}.get(
+        what, VIDEO_SUFFIXES)  # "video" and anything else
     if suffix not in allowed:
         raise ValueError(f"{what} file must be one of {sorted(allowed)}, got {f.filename!r}")
     dest = dest.with_suffix(suffix)
@@ -481,22 +505,60 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
         if config.api_key and request.headers.get("X-API-Key") != config.api_key:
             raise HTTPException(401, "invalid or missing X-API-Key header")
 
-    async def read_form(request: Request) -> tuple[dict, UploadFile, UploadFile | None]:
+    async def read_form(request: Request) -> tuple[dict, UploadFile, UploadFile | None,
+                                                   list[tuple[str, UploadFile]]]:
+        """-> (text fields, video, audio?, all uploaded files incl. repeated keys)."""
         form = await request.form()
         data = {k: v for k, v in form.items() if not hasattr(v, "read")}
         video, audio = form.get("video"), form.get("audio")
         if not hasattr(video, "read"):
             raise HTTPException(400, "a 'video' file is required")
-        return data, video, audio if hasattr(audio, "read") else None
+        files = [(k, v) for k, v in form.multi_items() if hasattr(v, "read")]
+        return data, video, audio if hasattr(audio, "read") else None, files
 
-    async def submit_job(data: dict, video: UploadFile, audio: UploadFile | None) -> Job:
+    def episode_files(data: dict, form_files: list[tuple[str, UploadFile]]) -> dict:
+        """`face.<name>` / `voice.<name>` upload pairs -> character names and file fields."""
+        faces: dict[str, UploadFile] = {}
+        voices: dict[str, UploadFile] = {}
+        for key, f in form_files:
+            kind, _, name = str(key).partition(".")
+            if kind == "face":
+                faces[name] = f
+            elif kind == "voice":
+                voices[name] = f
+        if not faces and not voices:
+            return {}
+        names = sorted(set(faces) & set(voices))
+        missing = (set(faces) | set(voices)) - set(names)
+        if not names or missing:
+            raise ValueError(f"every character needs face.<name> AND voice.<name>; "
+                             f"missing {sorted(missing) if missing else 'one of the pairs'}")
+        if len(names) > 8:
+            raise ValueError("at most 8 characters per episode job")
+        return {"characters": names, **{f"face_{n}": faces[n] for n in names},
+                **{f"voice_{n}": voices[n] for n in names}}
+
+    async def submit_job(data: dict, video: UploadFile, audio: UploadFile | None,
+                         files: list[tuple[str, UploadFile]] | None = None) -> Job:
         try:
+            episode = episode_files(data, files or [])
             params = parse_params(data)
-            if params["preview"]:
-                if audio is None:
-                    raise ValueError("preview also needs an 'audio' file (for its length)")
-            elif audio is None:
-                raise ValueError("an 'audio' file is required (only preview=true works without one)")
+            params["kind"] = "episode" if episode else "lipsync"
+            if params["preview"] and episode:
+                raise ValueError("preview is a single-face crop check; episode jobs run the real model")
+            if episode:
+                params.update(parse_episode(data))
+                if params["bbox"]:
+                    raise ValueError("bbox does not apply to episode jobs (faces are matched by "
+                                     "reference photo)")
+                if params["preview"]:
+                    raise ValueError("preview is a single-face crop check; episode jobs run the real model")
+            else:
+                if params["preview"]:
+                    if audio is None:
+                        raise ValueError("preview also needs an 'audio' file (for its length)")
+                elif audio is None:
+                    raise ValueError("an 'audio' file is required (only preview=true works without one)")
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
         tmpdir = service.new_tmpdir()
@@ -507,6 +569,13 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
             params["video_path"] = str(video_path)
             params["audio_path"] = str(audio_path) if audio_path else None
             params["video_name"] = Path(video.filename or "out.mp4").name or "out.mp4"
+            for key, f in (episode or {}).items():
+                if key == "characters":
+                    params[key] = f
+                    continue
+                what = "face" if key.startswith("face_") else "voice"
+                path = await save_upload(f, tmpdir / key, what, config.max_upload_mb)
+                params[key] = str(path)
             return service.submit(params, tmpdir)
         except QueueFull as e:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -531,7 +600,8 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
             raise HTTPException(410, "result already delivered once (POST the job again for a new one)")
         if job.status != "done" or job.out is None or not job.out.is_file():
             raise HTTPException(409, f"job is {job.status}; poll GET /jobs/{job.id}")
-        name = Path(job.params["video_name"]).stem + "_lipsync.mp4"
+        name = Path(job.params["video_name"]).stem + \
+            ("_episode.mp4" if job.params.get("kind") == "episode" else "_lipsync.mp4")
         return FileResponse(job.out, media_type="video/mp4", filename=name,
                             headers={"X-Job-Id": job.id, "X-Inference-Seconds": f"{job.seconds:.1f}"},
                             background=BackgroundTask(_cleanup, job))
@@ -544,7 +614,15 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
             ckpt = None
         return {
             "name": "wilro-sync", "version": __version__, "ckpt": ckpt,
-            "defaults": SERVE_DEFAULTS, "fields": sorted(ALLOWED_FIELDS - {"video", "audio"}),
+            "defaults": SERVE_DEFAULTS,
+            "fields": sorted(ALLOWED_FIELDS - {"video", "audio"}),
+            "files": {
+                "video": "the episode/clip to lip-sync",
+                "audio": "lipsync jobs: the voice track; episode jobs: the final soundtrack (optional; "
+                         "default: the character tracks summed)",
+                "face.<name> + voice.<name>": "episode: one reference photo and one episode-length voice "
+                                              "track per character; their presence selects episode mode",
+            },
             "endpoints": {
                 "POST /lipsync": "video + audio (+ bbox, settings) -> the lip-synced mp4; "
                                  "`timeout` (s) returns 202 + job_id instead",
@@ -566,8 +644,8 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
 
     @app.post("/lipsync", dependencies=[Depends(guarded)])
     async def lipsync(request: Request):
-        data, video, audio = await read_form(request)
-        job = await submit_job(data, video, audio)
+        data, video, audio, files = await read_form(request)
+        job = await submit_job(data, video, audio, files)
         timeout = job.params["timeout"]
         if timeout is not None and not await _wait(job, timeout):  # too slow for this request: poll instead
             return JSONResponse({"job_id": job.id, "status": job.status,
@@ -577,8 +655,8 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
 
     @app.post("/jobs", dependencies=[Depends(guarded)])
     async def start_job(request: Request):
-        data, video, audio = await read_form(request)
-        job = await submit_job(data, video, audio)
+        data, video, audio, files = await read_form(request)
+        job = await submit_job(data, video, audio, files)
         ahead = sum(j.status == "queued" for j in service.jobs() if j.created < job.created)
         return {"job_id": job.id, "status": job.status, "queue_position": ahead}
 
@@ -591,9 +669,15 @@ def create_app(config: ServerConfig, infer_fn=None, load_pipe_fn=None):
         job = service.job(jid)
         if job is None:
             raise HTTPException(404, "no such job")
-        return {"job_id": jid, "status": job.status, "error": job.error,
-                "created_at": job.created, "started_at": job.started, "finished_at": job.finished,
-                "inference_seconds": job.seconds}
+        out = {"job_id": jid, "status": job.status, "error": job.error,
+               "created_at": job.created, "started_at": job.started, "finished_at": job.finished,
+               "inference_seconds": job.seconds}
+        if job.params.get("kind") == "episode":
+            out["kind"] = "episode"
+            out["characters"] = job.params.get("characters", [])
+            if job.report is not None:
+                out["report"] = job.report
+        return out
 
     @app.get("/jobs/{jid}/result", dependencies=[Depends(guarded)])
     def job_result(jid: str):
