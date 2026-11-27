@@ -185,7 +185,7 @@ def extract_shot(video: str, start: int, end: int, out: str) -> str:
     rounds the last frame's duration away and each shot would come out one frame short."""
     _run("-ss", f"{start / FPS:.6f}", "-i", video, "-t", f"{(end - start) / FPS:.6f}",
          "-an", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-r", str(FPS),
-         "-fps_mode", "cfr", out)
+         "-vsync", "cfr", out)  # -vsync: also in ffmpeg 4.x (JetPack 6 apt), -fps_mode is 5.1+
     return out
 
 
