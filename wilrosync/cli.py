@@ -103,6 +103,25 @@ def cmd_lse(a: argparse.Namespace) -> None:
             f.writelines(json.dumps(r) + "\n" for r in rows)
 
 
+def cmd_episode(a) -> None:
+    import torch
+
+    from .pipeline.episode import lipsync_episode, parse_character
+    from .pipeline.face import face_infer_config
+    from .pipeline.lipsync import LipSyncPipeline
+
+    chars = [parse_character(c) for c in a.character]
+    dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[a.dtype]
+    device = a.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    pipe = LipSyncPipeline.from_pretrained(a.ckpt, device=device, dtype=dtype, text_device=a.text_device,
+                                           vae_dtype=torch.bfloat16 if a.vae_bf16 else torch.float32,
+                                           text_embeds=a.text_embeds)
+    overrides = {k: getattr(a, k) for k in ("steps", "window") if getattr(a, k) is not None}
+    lipsync_episode(pipe, a.video, chars, a.out, audio=a.audio, silent=a.silent, min_face=a.min_face,
+                    match_threshold=a.match, report=a.report, workdir=a.workdir,
+                    cfg=face_infer_config(**overrides))
+
+
 def cmd_background(a) -> None:
     from .pipeline.background import replace_background
 
@@ -237,6 +256,30 @@ def main(argv: list[str] | None = None) -> None:
                    "(see `wilro-sync data --help`)")
     sub.add_parser("sync-filter", help="score a clip manifest with SyncNet and drop badly synced videos "
                    "(see `wilro-sync sync-filter --help`)")
+
+    epi = sub.add_parser("episode", help="lip-sync every speaking character of a multi-shot, multi-person video "
+                         "(split at cuts, faces matched to reference photos, one voice track per character)")
+    epi.add_argument("--ckpt", required=True)
+    epi.add_argument("--video", required=True)
+    epi.add_argument("--character", action="append", required=True, metavar="NAME=FACE.jpg:VOICE.wav",
+                     help="once per character: a photo of their face and their own voice track (episode length, "
+                          "silence where they don't speak)")
+    epi.add_argument("--audio", default=None, help="the final soundtrack (default: the character tracks summed)")
+    epi.add_argument("--out", required=True)
+    epi.add_argument("--silent", default="keep", choices=["keep", "close"],
+                     help="a character on screen who doesn't speak: keep as filmed, or close the mouth")
+    epi.add_argument("--min-face", type=int, default=80, help="faces smaller than this (px) are not synced")
+    epi.add_argument("--match", type=float, default=None, help="face similarity to accept a match (default 0.363)")
+    epi.add_argument("--report", default=None, help="write the per-shot report (json)")
+    epi.add_argument("--workdir", default=None, help="folder for temporary shot files (default: system temp)")
+    epi.add_argument("--steps", type=int, default=None)
+    epi.add_argument("--window", type=int, default=None)
+    epi.add_argument("--device", default=None)
+    epi.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
+    epi.add_argument("--vae-bf16", action="store_true")
+    epi.add_argument("--text-device", default=None)
+    epi.add_argument("--text-embeds", default=None, help="saved prompt embedding (wilro-sync encode-prompt)")
+    epi.set_defaults(func=cmd_episode)
 
     bgp = sub.add_parser("background", help="replace the background of a video (person segmentation + composite)")
     bgp.add_argument("--video", required=True)

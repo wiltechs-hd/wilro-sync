@@ -42,6 +42,7 @@ dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]  # httpx: FastAPI TestClient
 train = ["bitsandbytes>=0.43", "lpips>=0.1.4"]  # lpips: optional perceptual loss
 data = ["yt-dlp>=2025.1"]
 face = ["mediapipe>=0.10.30"]  # tracked mouth oval for `wilro-sync infer-face`
+episode = ["scenedetect>=0.6"]  # `wilro-sync episode` (shot detection); face identity uses OpenCV from [face]
 server = ["fastapi>=0.110", "uvicorn>=0.30", "python-multipart>=0.0.9"]  # `wilro-sync serve`
 
 [project.scripts]

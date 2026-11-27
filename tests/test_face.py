@@ -426,16 +426,19 @@ def test_postroll_generates_extra_frames_after_the_end_and_drops_them(tmp_path):
 
 
 def test_reference_indices():
-    from wilrosync.pipeline.face import reference_indices
+    from wilrosync.pipeline.face import MIN_REFERENCE_FRAMES, reference_indices
 
-    s = np.arange(10)
-    assert reference_indices(s, 10, "same") is None
-    sh = reference_indices(s, 10, "shift")
-    assert sh[0] == 5 and sh.min() >= 0 and sh.max() <= 9 and np.abs(np.diff(sh)).max() == 1  # no jumps
-    assert list(reference_indices(s, 10, "reverse")) == list(range(9, -1, -1))
-    st = reference_indices(s, 10, "stride2")
-    assert st[0] == 5 and st.max() <= 9 and np.abs(np.diff(st)).max() <= 2
-    assert np.all(sh != s) and np.all(st[1:] != s[1:])  # never the frame being edited (except by chance)
+    n = 40
+    s = np.arange(n)
+    assert reference_indices(s, n, "same") is None
+    sh = reference_indices(s, n, "shift")
+    assert sh[0] == 20 and sh.min() >= 0 and sh.max() <= n - 1 and np.abs(np.diff(sh)).max() == 1  # no jumps
+    assert list(reference_indices(s, n, "reverse")) == list(range(n - 1, -1, -1))
+    st = reference_indices(s, n, "stride2")
+    assert st[0] == 20 and st.max() <= n - 1 and np.abs(np.diff(st)).max() <= 2
+    assert (sh != s).mean() > 0.9 and (st != s).mean() > 0.9  # almost never the frame being edited
+    k = MIN_REFERENCE_FRAMES - 1  # a very short clip (e.g. one short shot) keeps its own frames
+    assert reference_indices(np.arange(k), k, "stride2") is None
 
 
 def test_reference_is_passed_to_the_pipeline(tmp_path):
@@ -447,7 +450,7 @@ def test_reference_is_passed_to_the_pipeline(tmp_path):
             seen["frames"] = frames.copy()
             return frames
 
-    video, audio = _media(tmp_path)
+    video, audio = _media(tmp_path, t=30)  # long enough for a reference from other moments
     kw = dict(cfg=face_infer_config(steps=1, window=9), size=64, detector=_FakeDetector(),
               landmarker=_FakeLandmarker(), preroll=0, postroll=0)
     lipsync_face(_EchoPipe(), video, audio, str(tmp_path / "same.mp4"), reference="same", **kw)

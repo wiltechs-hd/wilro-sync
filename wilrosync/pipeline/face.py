@@ -214,6 +214,7 @@ def _blend_in_crop(gen: np.ndarray, crops: np.ndarray, masks, cfg: InferenceConf
 
 
 REFERENCES = ("same", "shift", "reverse", "stride2")
+MIN_REFERENCE_FRAMES = 25  # shorter clips use their own frames as the reference (1 s)
 
 
 def _reflect(k: np.ndarray, n: int) -> np.ndarray:
@@ -230,7 +231,7 @@ def reference_indices(src_idx: np.ndarray, n: int, mode: str) -> np.ndarray | No
     if mode not in REFERENCES:
         raise ValueError(f"reference must be one of {REFERENCES}, got {mode!r}")
     s = np.asarray(src_idx)
-    if mode == "same":
+    if mode == "same" or n < MIN_REFERENCE_FRAMES:  # a very short clip has no 'other moment' worth taking
         return None
     if mode == "shift":
         return _reflect(s + n // 2, n)
